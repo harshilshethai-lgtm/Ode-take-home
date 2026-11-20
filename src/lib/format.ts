@@ -6,6 +6,11 @@ export function fmtDate(d: Date): string {
   return dateFmt.format(d);
 }
 
+/** "Tue, Nov 10, 9:00 AM" */
+export function fmtScan(d: Date): string {
+  return `${dateFmt.format(d)}, ${timeFmt.format(d)}`;
+}
+
 export function fmtTime(d: Date): string {
   return timeFmt.format(d);
 }

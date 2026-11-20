@@ -1,5 +1,5 @@
 import { Bot } from "lucide-react";
-import { PEOPLE, PEOPLE_BY_ID } from "@/data/people";
+import { PEOPLE } from "@/data/people";
 import type { OwnerRole } from "@/domain/statuses";
 import type { Person } from "@/domain/types";
 
@@ -17,49 +17,33 @@ interface Props {
   onAssign: (personId: string | null) => void;
 }
 
+/** Owner: "System" for automated work, otherwise one dropdown. You appear in the list as "(me)". */
 export function AssignCell({ role, assigneeId, me, closed, onAssign }: Props) {
   if (role === "system" || closed) {
     return (
-      <span className="inline-flex items-center gap-1.5 text-xs text-slate-500">
+      <span className="inline-flex items-center gap-1.5 text-sm text-slate-500">
         <Bot size={14} /> System
       </span>
     );
   }
 
-  const people = eligiblePeople(role);
   const unassigned = assigneeId === null;
-  const canClaim = unassigned && people.some((p) => p.id === me.id);
 
   return (
-    <div className="flex flex-col gap-1">
-      <select
-        aria-label="Assign owner"
-        value={assigneeId ?? ""}
-        onChange={(e) => onAssign(e.target.value || null)}
-        className={`w-full max-w-[176px] rounded-md border px-2 py-1 text-xs outline-none focus:ring-2 focus:ring-indigo-300 ${
-          unassigned
-            ? "border-dashed border-slate-300 bg-white text-slate-500"
-            : "border-slate-200 bg-slate-50 font-medium text-slate-800"
-        }`}
-      >
-        <option value="">Unassigned</option>
-        {people.map((p) => (
-          <option key={p.id} value={p.id}>
-            {p.name}
-          </option>
-        ))}
-      </select>
-      {canClaim ? (
-        <button
-          type="button"
-          onClick={() => onAssign(me.id)}
-          className="w-fit text-xs font-medium text-indigo-600 hover:text-indigo-800 hover:underline"
-        >
-          Assign to me
-        </button>
-      ) : assigneeId && PEOPLE_BY_ID[assigneeId]?.id === me.id ? (
-        <span className="text-[11px] text-slate-400">Yours</span>
-      ) : null}
-    </div>
+    <select
+      aria-label="Assign owner"
+      value={assigneeId ?? ""}
+      onChange={(e) => onAssign(e.target.value || null)}
+      className={`w-[170px] cursor-pointer rounded-md border border-transparent bg-transparent px-1.5 py-1 text-sm outline-none hover:border-slate-200 hover:bg-white focus:border-indigo-300 focus:ring-2 focus:ring-indigo-200 ${
+        unassigned ? "text-slate-400" : "text-slate-800"
+      }`}
+    >
+      <option value="">Unassigned</option>
+      {eligiblePeople(role).map((p) => (
+        <option key={p.id} value={p.id}>
+          {p.id === me.id ? `${p.name} (me)` : p.name}
+        </option>
+      ))}
+    </select>
   );
 }

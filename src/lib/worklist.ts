@@ -1,6 +1,7 @@
 // Pure view logic for the worklist: row derivation, saved views, filters, sorting.
 
 import { DEMO_NOW } from "@/data/orders";
+import { deriveFlags, type Flag } from "@/domain/flags";
 import { ownerRoleFor, STATUSES, isClosed, type OwnerRole } from "@/domain/statuses";
 import { computeTimeRisk, type TimeRisk } from "@/domain/timeRisk";
 import type { Order } from "@/domain/types";
@@ -13,23 +14,37 @@ export interface Row {
   minutesInStatus: number;
   overSla: boolean;
   closed: boolean;
+  flags: Flag[];
 }
 
 export function toRow(order: Order, now: Date = DEMO_NOW): Row {
   const def = STATUSES[order.status];
   const minutesInStatus = minutesSince(order.statusSince, now);
+  const scanAt = order.scheduledAt ? new Date(order.scheduledAt) : null;
+  const risk = computeTimeRisk({ scanAt, insurer: order.insurer, status: order.status, now });
+  const overSla = def.slaHours !== null && minutesInStatus > def.slaHours * 60;
+  const closed = isClosed(order.status);
+
   return {
     order,
     ownerRole: ownerRoleFor(order.status, order.channel),
-    risk: computeTimeRisk({
-      scanAt: order.scheduledAt ? new Date(order.scheduledAt) : null,
+    risk,
+    minutesInStatus,
+    overSla,
+    closed,
+    flags: deriveFlags({
+      findings: order.findings ?? [],
+      risk,
+      priority: order.priority,
+      closed,
+      overSla:
+        overSla && def.slaHours !== null
+          ? { statusLabel: def.label, minutes: minutesInStatus, slaHours: def.slaHours }
+          : null,
+      scanAt,
       insurer: order.insurer,
-      status: order.status,
       now,
     }),
-    minutesInStatus,
-    overSla: def.slaHours !== null && minutesInStatus > def.slaHours * 60,
-    closed: isClosed(order.status),
   };
 }
 

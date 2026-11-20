@@ -1,3 +1,4 @@
+import type { FindingFlag } from "./flags";
 import type { Channel, OwnerRole, StatusId } from "./statuses";
 
 export interface Person {
@@ -40,4 +41,6 @@ export interface Order {
   nextAction: string;
   attachmentCount: number;
   policyRef: string | null;
+  /** Pipeline findings shown as flags on the worklist (rule violations, safety, coverage, missing pages). */
+  findings?: FindingFlag[];
 }

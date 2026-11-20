@@ -98,6 +98,12 @@ const demo: Order[] = [
     nextAction: "Review with ordering doctor",
     attachmentCount: 4,
     policyRef: "IMG-330",
+    findings: [
+      {
+        type: "rule_violation",
+        detail: "IMG-330 · Repeat imaging: prior shoulder MRI 06/15 is inside 12 months and no exception is documented.",
+      },
+    ],
   },
   {
     id: "case-9-picard",
@@ -142,6 +148,7 @@ const demo: Order[] = [
     nextAction: "Call clinic for resend",
     attachmentCount: 2,
     policyRef: "MSK-207 rev 3",
+    findings: [{ type: "missing_docs", detail: "PP-2 · Fax page 3 is blank (header only). Resend requested from the clinic." }],
   },
   {
     id: "case-15-nog",
@@ -164,6 +171,9 @@ const demo: Order[] = [
     nextAction: "Get correct page from clinic",
     attachmentCount: 2,
     policyRef: "RAD-114 v3",
+    findings: [
+      { type: "safety", detail: "MA-3 · Page 2 belongs to a different patient. Page quarantined, privacy flag raised." },
+    ],
   },
   {
     id: "case-18-sisko",
@@ -186,6 +196,7 @@ const demo: Order[] = [
     nextAction: "Verify coverage with patient",
     attachmentCount: 3,
     policyRef: null,
+    findings: [{ type: "coverage", detail: "CV-1 · Insurance card on file differs from the insurer on the order." }],
   },
   {
     id: "case-19-kira",
@@ -230,6 +241,7 @@ const demo: Order[] = [
     nextAction: "Ask sender to resend",
     attachmentCount: 1,
     policyRef: null,
+    findings: [{ type: "missing_docs", detail: "PP-2 · Every page is blank. Nothing could be read from this fax." }],
   },
   {
     id: "case-16-yar",
