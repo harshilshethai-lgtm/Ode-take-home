@@ -7,6 +7,7 @@ import { INSURER_TURNAROUND_HOURS, hoursUntil, type TimeRisk } from "./timeRisk"
 
 export type FlagId =
   | "safety"
+  | "slot_unreachable"
   | "slot_at_risk"
   | "scan_at_risk"
   | "urgent"
@@ -36,6 +37,11 @@ export const FLAG_DEFS: Record<FlagId, { label: string; meaning: string; tone: F
   safety: {
     label: "Patient safety or privacy",
     meaning: "Wrong-patient page, or the side (left/right) disagrees across the record.",
+    tone: "danger",
+  },
+  slot_unreachable: {
+    label: "Slot unreachable",
+    meaning: "Submit-by is before the case arrived, so this insurer cannot decide in time.",
     tone: "danger",
   },
   slot_at_risk: {
@@ -83,6 +89,7 @@ export const FLAG_DEFS: Record<FlagId, { label: string; meaning: string; tone: F
 /** Most severe first. Controls icon order in the column. */
 export const FLAG_ORDER: FlagId[] = [
   "safety",
+  "slot_unreachable",
   "slot_at_risk",
   "scan_at_risk",
   "urgent",
@@ -104,8 +111,10 @@ export function deriveFlags(args: {
   now: Date;
   /** Submitted, with no decision, inside 24 business hours of the scan. */
   scanDecisionRisk?: boolean;
+  /** Submit-by is earlier than the moment the case arrived. */
+  slotUnreachable?: boolean;
 }): Flag[] {
-  const { findings, risk, priority, closed, overSla, scanAt, insurer, now, scanDecisionRisk } = args;
+  const { findings, risk, priority, closed, overSla, scanAt, insurer, now, scanDecisionRisk, slotUnreachable } = args;
   const out: Flag[] = findings.map((f) => ({ id: f.type, detail: f.detail }));
 
   if (closed) return sortFlags(out);
@@ -118,7 +127,12 @@ export function deriveFlags(args: {
     out.push({ id: "scan_at_risk", detail: "No decision and the scan is inside 24 business hours. Ask scheduling to hold or move it." });
   }
 
-  if (scanAt && (risk === "slot_at_risk" || risk === "at_risk")) {
+  if (slotUnreachable) {
+    out.push({
+      id: "slot_unreachable",
+      detail: "The packet arrived after submit-by. Reschedule the scan or request an expedited review.",
+    });
+  } else if (scanAt && (risk === "slot_at_risk" || risk === "at_risk")) {
     const when = fmtCountdown(scanAt, now);
     const turnaround = (insurer && INSURER_TURNAROUND_HOURS[insurer]) || 48;
     if (risk === "slot_at_risk") {

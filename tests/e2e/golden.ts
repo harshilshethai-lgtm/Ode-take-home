@@ -43,13 +43,9 @@ export async function assertScott(page: Page): Promise<void> {
     if ((await criterion.getAttribute("aria-expanded")) === "false") await criterion.click();
     await page.getByRole("button", { name: "[missing] PT notes p.4" }).click();
     await see(page.getByText("Fax page 4 of 6 not received · PT progress notes, Utopia Planitia Rehab (per cover sheet)"));
-    const cited = page
-      .locator("div.flex")
-      .filter({ has: page.getByText("about six weeks", { exact: true }) })
-      .filter({ has: page.getByRole("button", { name: "fax p.3", exact: true }) })
-      .first();
+    const cited = page.locator("button[data-quote='about six weeks']").first();
     await see(cited);
-    await cited.getByRole("button", { name: "fax p.3", exact: true }).click();
+    await cited.click();
     await see(page.locator("[data-cite-box]"));
     await see(page.locator("div.line-clamp-3"));
     expect(await page.locator("div.line-clamp-3").innerText()).toContain("about six weeks");

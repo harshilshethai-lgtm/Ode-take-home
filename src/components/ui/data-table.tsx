@@ -12,6 +12,12 @@ export interface Column<T> {
   width?: string;
   /** Allow the cell to wrap. Comfortable tables use this for a name over a caption. */
   wrap?: boolean;
+  /**
+   * content: size to the text, never ellipsis.
+   * shrink: ellipsis below 1280px, full text at 1280px and up.
+   * Unset: the historical clip, so other tables stay the same.
+   */
+  fit?: "content" | "shrink";
   cell: (row: T) => ReactNode;
 }
 
@@ -26,6 +32,8 @@ interface Props<T> {
   empty?: ReactNode;
   /** Two-line cells (name over a caption). Header sits on the app surface. */
   comfortable?: boolean;
+  /** 4px cell padding, for a table that has to fit the viewport. */
+  compact?: boolean;
   className?: string;
 }
 
@@ -46,6 +54,7 @@ export function DataTable<T>({
   loading,
   empty,
   comfortable = false,
+  compact = false,
   className,
 }: Props<T>) {
   if (columns.length > MAX_COLUMNS) {
@@ -60,10 +69,13 @@ export function DataTable<T>({
               key={c.id}
               scope="col"
               className={cn(
-                "sticky top-0 z-10 whitespace-nowrap border-l-2 border-transparent px-3 text-caption font-normal text-fg-2",
+                "sticky top-0 z-10 border-l-2 border-transparent text-caption font-normal text-fg-2",
+                compact ? "whitespace-nowrap max-xl:whitespace-normal" : "whitespace-nowrap",
+                compact ? "px-1" : "px-3",
                 comfortable ? "h-9 bg-app" : "h-8 bg-panel",
-                i === 0 && (comfortable ? "pl-6" : "pl-4"),
-                i === columns.length - 1 && comfortable && "pr-6",
+                c.fit === "shrink" && "w-full max-w-0 xl:whitespace-normal max-xl:overflow-hidden max-xl:text-ellipsis max-xl:whitespace-nowrap",
+                i === 0 && (comfortable && !compact ? "pl-6" : "pl-4"),
+                i === columns.length - 1 && comfortable && !compact && "pr-6",
                 c.align === "right" && "text-right",
                 c.width && !c.width.endsWith("%") && c.width,
               )}
@@ -112,10 +124,13 @@ export function DataTable<T>({
                   <td
                     key={c.id}
                     className={cn(
-                      "h-9 border-l-2 px-3 align-middle",
-                      c.wrap ? "whitespace-normal" : "overflow-hidden whitespace-nowrap",
-                      i === 0 && (comfortable ? "pl-6" : "pl-4"),
-                      i === columns.length - 1 && comfortable && "pr-6",
+                      "h-9 border-l-2 align-middle",
+                      compact ? "px-1" : "px-3",
+                      c.fit === "content" && "w-px whitespace-nowrap",
+                      c.fit === "shrink" && "max-xl:w-full max-xl:min-w-32 max-xl:max-w-0 max-xl:overflow-hidden max-xl:text-ellipsis max-xl:whitespace-nowrap xl:whitespace-nowrap",
+                      !c.fit && (c.wrap ? "whitespace-normal" : "overflow-hidden whitespace-nowrap"),
+                      i === 0 && (comfortable && !compact ? "pl-6" : "pl-4"),
+                      i === columns.length - 1 && comfortable && !compact && "pr-6",
                       i === 0 && selected ? "border-accent" : "border-transparent",
                       c.align === "right" && "tabular text-right",
                     )}

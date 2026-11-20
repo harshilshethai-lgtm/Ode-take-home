@@ -2,8 +2,9 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { Check, CircleDashed, CircleDot, Shield, X, type LucideIcon } from "lucide-react";
 import { CitationChip } from "@/components/ui/citation-chip";
-import { CollapsibleSection } from "@/components/ui/collapsible-section";
 import { SourceTag } from "@/components/ui/source-tag";
+import { CollapsibleSection } from "@/components/ui/collapsible-section";
+import type { WaiverRow } from "@/domain/casePane";
 import type { ChecklistModel, CriterionRowModel, DataCheckModel, EvidenceLine } from "@/domain/checklistView";
 import { checkedLine } from "@/domain/checklistView";
 import type { CriterionStatus } from "@/domain/rules/types";
@@ -41,7 +42,7 @@ export function ChecklistCard({ model, onOpen }: { model: ChecklistModel; onOpen
   if (!model.criteria && !model.dataChecks && !model.verdict) return null;
   return (
     <section className="rounded-block border border-line-strong bg-panel px-6 py-5">
-      <h2 className="text-block text-fg">Checklist</h2>
+      <h2 className="text-block text-fg">Insurer criteria</h2>
       {model.verdict && <div className="mt-2 text-body text-fg">{model.verdict}</div>}
       {model.criteria && (
         <CollapsibleSection title="Insurer criteria" count={model.criteria.count} defaultOpen={model.criteria.defaultOpen} className="mt-2">
@@ -51,6 +52,7 @@ export function ChecklistCard({ model, onOpen }: { model: ChecklistModel; onOpen
           ))}
         </CollapsibleSection>
       )}
+      {model.waivers.length > 0 && <WaiverList rows={model.waivers} onOpen={onOpen} />}
       {model.dataChecks && (
         <CollapsibleSection title="Data checks" count={model.dataChecks.count} defaultOpen={model.dataChecks.defaultOpen} className="mt-2">
           {model.dataChecks.rows.map((row) => (
@@ -94,6 +96,7 @@ function CriterionRow({ row, onOpen }: { row: CriterionRowModel; onOpen: (cite: 
               {row.policyCite && (
                 <CitationChip
                   label="Policy"
+                  docId={row.policyCite.docId}
                   page={row.policyCite.page}
                   excerpt={row.policyCite.quote}
                   onOpen={() => onOpen({ docId: row.policyCite!.docId, page: row.policyCite!.page, quote: row.policyCite!.quote })}
@@ -119,7 +122,7 @@ function DataCheckRow({ row, onOpen }: { row: DataCheckModel; onOpen: (cite: Ope
         <RowText label={row.label} fact={row.fact} />
       </div>
       {row.cite && (
-        <CitationChip page={row.cite.page} excerpt={row.cite.quote} onOpen={() => onOpen({ docId: row.cite!.docId, page: row.cite!.page, quote: row.cite!.quote })} />
+        <CitationChip docId={row.cite.docId} page={row.cite.page} excerpt={row.cite.quote} onOpen={() => onOpen({ docId: row.cite!.docId, page: row.cite!.page, quote: row.cite!.quote })} />
       )}
       {row.epic && <SourceTag system="epic" lastRun={row.epic.lastRun} />}
       <StatusMark status={row.status} />
@@ -153,6 +156,32 @@ export function EvidenceCard({ lines, onOpen }: { lines: EvidenceLine[]; onOpen:
   );
 }
 
+function WaiverList({ rows, onOpen }: { rows: WaiverRow[]; onOpen: (cite: OpenPage) => void }) {
+  return (
+    <div className="mt-2 border-t border-line pt-2">
+      <div className="text-caption text-fg-2">Waivers</div>
+      {rows.map((row) => (
+        <div key={row.id} data-row className="flex items-start gap-3 border-t border-line py-2 first:border-t-0">
+          <div className="min-w-0 flex-1">
+            <div className="text-body text-fg">{row.trigger}</div>
+            <div className="text-caption text-fg-2">{row.status}</div>
+            <div className="text-body text-fg-2">{row.detail}</div>
+          </div>
+          {row.cite && (
+            <CitationChip
+              docId={row.cite.docId}
+              page={row.cite.page}
+              label={row.cite.label}
+              excerpt={row.cite.quote}
+              onOpen={() => onOpen({ docId: row.cite!.docId, page: row.cite!.page, quote: row.cite!.quote })}
+            />
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function EvidenceLineView({ line, onOpen }: { line: EvidenceLine; onOpen: (cite: OpenPage) => void }) {
   return (
     <div className="flex items-start gap-3">
@@ -163,11 +192,13 @@ function EvidenceLineView({ line, onOpen }: { line: EvidenceLine; onOpen: (cite:
       </div>
       {line.cite && (
         <CitationChip
+          docId={line.cite.docId}
           page={line.cite.page}
           excerpt={line.cite.quote}
           onOpen={() => onOpen({ docId: line.cite!.docId, page: line.cite!.page, quote: line.cite!.quote })}
         />
       )}
+      {!line.cite && line.checked && <SourceTag system={line.checked.system} lastRun={line.checked.lastRun} />}
     </div>
   );
 }

@@ -5,7 +5,6 @@ import { AssignMenu, eligiblePeople, firstName } from "@/components/AssignMenu";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
 import { Chip } from "@/components/ui/chip";
-import { CitationChip } from "@/components/ui/citation-chip";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { FlagIcons } from "@/components/ui/flag-icons";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
@@ -13,26 +12,41 @@ import { Kbd } from "@/components/ui/kbd";
 import { PageTitle } from "@/components/ui/page-title";
 import { MenuItem, Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { PropertyList } from "@/components/ui/property-list";
-import { SourceTag } from "@/components/ui/source-tag";
-import { StatusDot } from "@/components/ui/status-dot";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Tabs } from "@/components/ui/tabs";
 import { Tip } from "@/components/ui/tooltip";
 import { PEOPLE } from "@/data/people";
 import { buildCaseRecord } from "@/domain/caseRecord";
-import { actionStatusLabel } from "@/domain/priorAuth/render";
 import { memberIdFor } from "@/domain/memberId";
+import { phoneForProvider } from "@/domain/outreach";
 import { normalizeProvider } from "@/domain/providers";
 import { STATUSES } from "@/domain/statuses";
 import { cn } from "@/lib/cn";
 import type { Order, Person } from "@/domain/types";
-import { DEMO_NOW, SUBMIT_BY_HINT, parseDemoInstant, relativeToClock } from "@/lib/demoClock";
+import { DEMO_NOW, SUBMIT_BY_HINT, parseDemoInstant } from "@/lib/demoClock";
 import { fmtDob, fmtTableDate } from "@/lib/format";
-import { CHANNEL_LABEL, SIDE_SHORT, label } from "@/lib/labels";
+import { CHANNEL_LABEL, label } from "@/lib/labels";
 import { eligibilityFor } from "@/lib/mocks/eligibility";
 import { usePersona } from "@/lib/persona";
 import { useOrders } from "@/lib/useWorklistState";
-import { byRiskThenScan, bySchedule, inView, isSlotAtRisk, matchesPolicy, matchesSearch, scanAttention, toRow, VIEWS, type Row, type ViewId } from "@/lib/worklist";
+import {
+  byDue,
+  closedColumns,
+  criteriaScore,
+  duePrimary,
+  inView,
+  insurerColumns,
+  matchesPolicy,
+  matchesSearch,
+  nextStep,
+  queueMeter,
+  scanCaption,
+  studyLine,
+  toRow,
+  VIEWS,
+  type Row,
+  type ViewId,
+} from "@/lib/worklist";
 import { parseWorklistUrl, serializeWorklistUrl, type SortDir, type SortKey, type WorklistUrlState } from "@/lib/worklistQuery";
 
 const PERSONA_DEFAULT_VIEW: Record<Person["role"], ViewId> = {
@@ -83,7 +97,6 @@ export default function Worklist() {
   const statusFilter = url.status;
   const reasonFilter = url.reason;
   const hideWaiting = url.hideWaiting;
-  const slotAtRisk = url.slotAtRisk;
   const insurerFilter = url.insurer;
   const policyFilter = url.policy;
   const query = url.q;
@@ -119,7 +132,6 @@ export default function Worklist() {
       .filter((r) => (statusFilter ? r.order.status === statusFilter : true))
       .filter((r) => (reasonFilter ? r.reasonChip === reasonFilter : true))
       .filter((r) => (hideWaiting ? !r.waiting : true))
-      .filter((r) => (slotAtRisk ? isSlotAtRisk(r) : true))
       .filter((r) => (insurerFilter ? r.order.insurer === insurerFilter : true))
       .filter((r) => matchesSearch(r, query));
     const assigneeName = (id: string | null) => PEOPLE.find((p) => p.id === id)?.name ?? "";
@@ -134,12 +146,13 @@ export default function Worklist() {
           return cmpText(a.order.insurer, b.order.insurer, dir);
         case "study":
           return cmpText(a.order.study, b.order.study, dir);
+        case "due":
         case "appointment":
-          return dir === "asc" ? byRiskThenScan(a, b) : bySchedule(b, a);
+          return dir === "asc" ? byDue(a, b) : byDue(b, a);
         case "provider":
           return cmpText(facts.get(a.order.id)?.provider, facts.get(b.order.id)?.provider, dir);
         case "reason":
-          return cmpText(a.reasonChip ?? a.stepText, b.reasonChip ?? b.stepText, dir);
+          return cmpText(nextStep(a).text, nextStep(b).text, dir);
         case "type":
           return cmpText(a.order.channel ? label(CHANNEL_LABEL, a.order.channel) : "", b.order.channel ? label(CHANNEL_LABEL, b.order.channel) : "", dir);
         case "urgency":
@@ -150,7 +163,7 @@ export default function Worklist() {
           return cmpText(assigneeName(a.order.assigneeId), assigneeName(b.order.assigneeId), dir);
       }
     });
-  }, [rows, view, statusFilter, reasonFilter, hideWaiting, slotAtRisk, insurerFilter, policyFilter, query, sort, facts, viewer]);
+  }, [rows, view, statusFilter, reasonFilter, hideWaiting, insurerFilter, policyFilter, query, sort, facts, viewer]);
 
   const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
   const safePage = Math.min(page, pageCount - 1);
@@ -279,7 +292,6 @@ export default function Worklist() {
     </button>
   );
 
-  const showStatus = view === "all";
   const selectPage = (
     <input
       type="checkbox"
@@ -296,143 +308,216 @@ export default function Worklist() {
         })
       }
       onClick={(e) => e.stopPropagation()}
-      className={cn("absolute -left-6 accent-accent", selected.size === 0 && "opacity-0 group-hover/table:opacity-100 focus-visible:opacity-100")}
+      className={cn("absolute -left-4 accent-accent xl:-left-6", selected.size === 0 && "opacity-0 group-hover/table:opacity-100 focus-visible:opacity-100")}
     />
   );
 
-  const columns: Column<Row>[] = [
-    {
-      id: "flags",
-      header: "Flags",
-      width: "9%",
-      headerCell: (
-        <span className="relative inline-flex items-center">
-          {selectPage}
-          Flags
-        </span>
-      ),
-      cell: (r) => (
-        <span className="relative inline-flex items-center">
-          <input
-            type="checkbox"
-            aria-label={`Select ${r.order.patient?.name ?? "unmatched document"}`}
-            checked={selected.has(r.order.id)}
-            onChange={() => toggle(r.order.id)}
-            onClick={(e) => e.stopPropagation()}
-            className="absolute -left-6 accent-accent opacity-0 checked:opacity-100 group-hover:opacity-100"
-          />
-          <FlagIcons flags={r.flags} />
-        </span>
-      ),
-    },
-    {
-      id: "scan",
-      header: "Scan",
-      width: "16%",
-      headerCell: (
-        <Tip content={SUBMIT_BY_HINT}>
-          <span>{sortHeader("appointment", "Scan")}</span>
+  const rowCheck = (row: Row) => (
+    <input
+      type="checkbox"
+      aria-label={`Select ${row.order.patient?.name ?? "unmatched document"}`}
+      checked={selected.has(row.order.id)}
+      onChange={() => toggle(row.order.id)}
+      onClick={(e) => e.stopPropagation()}
+      className="absolute -left-4 accent-accent opacity-0 checked:opacity-100 group-hover:opacity-100 xl:-left-6"
+    />
+  );
+
+  const withCheck = (column: Column<Row>): Column<Row> => ({
+    ...column,
+    headerCell: (
+      <span className="relative inline-flex items-center">
+        {selectPage}
+        {column.headerCell ?? column.header}
+      </span>
+    ),
+    cell: (row) => (
+      <span className={cn("relative flex items-center", column.fit === "shrink" ? "min-w-0" : "w-max")}>
+        {rowCheck(row)}
+        {column.cell(row)}
+      </span>
+    ),
+  });
+
+  const dueColumn: Column<Row> = {
+    id: "due",
+    header: "Due",
+    fit: "content",
+    headerCell: (
+      <Tip content={SUBMIT_BY_HINT}>
+        <span>{sortHeader("due", "Due")}</span>
+      </Tip>
+    ),
+    cell: (row) => <DueCell row={row} />,
+  };
+  const patientColumn: Column<Row> = {
+    id: "patient",
+    header: "Patient",
+    fit: "content",
+    headerCell: sortHeader("patient", "Patient"),
+    cell: (row) => <PatientCell row={row} facts={facts.get(row.order.id)} />,
+  };
+  const nextColumn: Column<Row> = {
+    id: "next",
+    header: "Next step",
+    fit: "shrink",
+    headerCell: sortHeader("reason", "Next step"),
+    cell: (row) => <NextStepCell row={row} />,
+  };
+  const studyColumn: Column<Row> = {
+    id: "study",
+    header: "Study",
+    fit: "content",
+    headerCell: sortHeader("study", "Study"),
+    cell: (row) => {
+      const text = studyLine(row.order);
+      if (!text) return null;
+      return (
+        <Tip content={`${text}. ${EPIC_CHECKED}`}>
+          <span>{text}</span>
         </Tip>
-      ),
-      cell: (r) => <ScanCell row={r} />,
+      );
     },
-    {
-      id: "patient",
-      header: "Patient",
-      width: "16%",
-      wrap: true,
-      headerCell: sortHeader("patient", "Patient"),
-      cell: (r) => <PatientCell row={r} facts={facts.get(r.order.id)} />,
-    },
-    {
-      id: "study",
-      header: "Study",
-      width: "12%",
-      headerCell: sortHeader("study", "Study"),
-      cell: (r) => {
-        const text = r.order.side ? `${r.order.study} · ${label(SIDE_SHORT, r.order.side)}` : r.order.study;
-        if (!text) return null;
-        return (
-          <Tip content={`${text}. ${EPIC_CHECKED}`}>
-            <span className="block truncate">{text}</span>
-          </Tip>
-        );
-      },
-    },
-    {
-      id: "insurer",
-      header: "Insurer",
-      width: "15%",
-      headerCell: sortHeader("insurance", "Insurer"),
-      cell: (r) => {
-        if (!r.order.insurer) return null;
-        const member = facts.get(r.order.id)?.memberId;
-        const full = [r.order.insurer, r.order.plan, member].filter(Boolean).join(" · ");
-        return (
-          <Tip content={`${full}. ${EPIC_CHECKED}`}>
-            <span className="block min-w-0">
-              <span className="block truncate">{r.order.insurer}</span>
-              {member && <span className="block truncate font-mono text-caption text-fg-2">{member}</span>}
-            </span>
-          </Tip>
-        );
-      },
-    },
-    showStatus
-      ? {
-          id: "status",
-          header: "Status",
-          width: "14%",
-          headerCell: sortHeader("status", "Status"),
-          cell: (r) => (
-            <Tip content={r.order.reason}>
-              <span className="block truncate">
-                <StatusPill status={r.order.status} channel={r.order.channel} reasonCode={r.order.reasonCode} />
-              </span>
-            </Tip>
-          ),
-        }
-      : {
-          id: "reason",
-          header: "Reason",
-          width: "14%",
-          headerCell: sortHeader("reason", "Reason"),
-          cell: (r) => <ReasonCell row={r} />,
-        },
-    {
-      id: "owner",
-      header: "Owner",
-      width: "10%",
-      headerCell: sortHeader("assignee", "Owner"),
-      cell: (r) => {
-        const canAssign = eligiblePeople(r.ownerRole).some((person) => person.id === me.id);
-        const menu = (
-          <span className="inline-flex max-w-full" onClick={(e) => e.stopPropagation()}>
-            <AssignMenu role={r.ownerRole} assigneeId={r.order.assigneeId} me={me} closed={r.closed} onAssign={(pid) => assign([r.order.id], pid)} />
-          </span>
-        );
-        return canAssign ? (
-          <Tip content="Assign to me" shortcut="A">
-            {menu}
-          </Tip>
-        ) : (
-          menu
-        );
-      },
-    },
-    {
-      id: "age",
-      header: "Age",
-      width: "8%",
-      align: "right",
-      headerCell: sortHeader("received", "Age"),
-      cell: (r) => (
-        <Tip content={parseDemoInstant(r.order.statusSince).toISOString()}>
-          <span className="tabular text-fg-2">{relativeToClock(r.order.statusSince)}</span>
+  };
+  const insurerColumn: Column<Row> = {
+    id: "insurer",
+    header: "Insurer",
+    fit: "content",
+    headerCell: sortHeader("insurance", "Insurer"),
+    cell: (row) => <InsurerCell row={row} />,
+  };
+  const statusColumn: Column<Row> = {
+    id: "status",
+    header: "Status",
+    fit: "content",
+    headerCell: sortHeader("status", "Status"),
+    cell: (row) => (
+      <Tip content={row.order.reason}>
+        <span>
+          <StatusPill status={row.order.status} channel={row.order.channel} reasonCode={row.order.reasonCode} label={row.order.statusLabel} />
+        </span>
+      </Tip>
+    ),
+  };
+  const ownerColumn: Column<Row> = {
+    id: "owner",
+    header: "Owner",
+    fit: "content",
+    headerCell: sortHeader("assignee", "Owner"),
+    cell: (row) => {
+      const canAssign = eligiblePeople(row.ownerRole).some((person) => person.id === me.id);
+      const menu = (
+        <span className="inline-flex max-w-full" onClick={(e) => e.stopPropagation()}>
+          <AssignMenu role={row.ownerRole} assigneeId={row.order.assigneeId} me={me} closed={row.closed} onAssign={(pid) => assign([row.order.id], pid)} />
+        </span>
+      );
+      return canAssign ? (
+        <Tip content="Assign to me" shortcut="A">
+          {menu}
         </Tip>
-      ),
+      ) : (
+        menu
+      );
     },
-  ];
+  };
+  const queueColumn: Column<Row> = {
+    id: "queue",
+    header: "In queue",
+    fit: "content",
+    headerCell: sortHeader("received", "In queue"),
+    cell: (row) => {
+      const meter = queueMeter(row);
+      return (
+        <Tip content={parseDemoInstant(row.order.statusSince).toISOString()}>
+          <span className={cn("tabular", meter.over && "text-bad")}>{meter.text}</span>
+        </Tip>
+      );
+    },
+  };
+  const criteriaColumn: Column<Row> = {
+    id: "criteria",
+    header: "Criteria",
+    fit: "content",
+    cell: (row) => <CriteriaMeter score={facts.get(row.order.id)?.criteria ?? null} />,
+  };
+
+  const referenceColumn = (): Column<Row> => ({
+    id: "reference",
+    header: "Reference",
+    fit: "content",
+    cell: (row) => {
+      const reference = insurerColumns(row).reference;
+      return reference ? <span className="font-mono text-caption">{reference}</span> : null;
+    },
+  });
+  const waitingColumn = (): Column<Row> => ({
+    id: "waiting",
+    header: "With insurer for",
+    fit: "content",
+    headerCell: sortHeader("received", "With insurer for"),
+    cell: (row) => <span className="tabular">{insurerColumns(row).waiting}</span>,
+  });
+  const lastCheckColumn = (): Column<Row> => ({
+    id: "check",
+    header: "Last check",
+    fit: "content",
+    cell: (row) => {
+      const check = insurerColumns(row);
+      if (!check.lastCheck) return null;
+      return <span className={cn("tabular", check.overdue && "text-bad")}>{check.lastCheck}</span>;
+    },
+  });
+  const latestColumn = (): Column<Row> => ({
+    id: "answer",
+    header: "Latest answer",
+    fit: "content",
+    cell: (row) => <span>{insurerColumns(row).latest}</span>,
+  });
+  const outcomeColumn = (): Column<Row> => ({
+    id: "outcome",
+    header: "Outcome",
+    fit: "content",
+    headerCell: sortHeader("status", "Outcome"),
+    cell: (row) => <span>{closedColumns(row.order).outcome}</span>,
+  });
+  const authColumn = (): Column<Row> => ({
+    id: "auth",
+    header: "Auth #",
+    fit: "content",
+    cell: (row) => {
+      const auth = closedColumns(row.order).auth;
+      return auth ? <span className="font-mono text-caption">{auth}</span> : <span className="text-fg-3">—</span>;
+    },
+  });
+  const validColumn = (): Column<Row> => ({
+    id: "valid",
+    header: "Valid through",
+    fit: "content",
+    cell: (row) => {
+      const valid = closedColumns(row.order).validThrough;
+      return valid ? <span className="tabular">{valid}</span> : <span className="text-fg-3">—</span>;
+    },
+  });
+  const closedOnColumn = (): Column<Row> => ({
+    id: "closed",
+    header: "Closed",
+    fit: "content",
+    headerCell: sortHeader("received", "Closed"),
+    cell: (row) => <span className="tabular text-fg-2">{fmtTableDate(parseDemoInstant(row.order.statusSince))}</span>,
+  });
+
+  const queueColumns = [dueColumn, patientColumn, nextColumn, studyColumn, insurerColumn, ownerColumn, queueColumn];
+  const columns: Column<Row>[] = (
+    view === "with_insurer"
+      ? [dueColumn, patientColumn, studyColumn, insurerColumn, referenceColumn(), waitingColumn(), lastCheckColumn(), latestColumn()]
+      : view === "closed"
+        ? [patientColumn, studyColumn, insurerColumn, outcomeColumn(), authColumn(), validColumn(), closedOnColumn()]
+        : view === "clinical"
+          ? [dueColumn, patientColumn, nextColumn, studyColumn, insurerColumn, criteriaColumn, ownerColumn, queueColumn]
+          : view === "all"
+            ? [dueColumn, patientColumn, statusColumn, nextColumn, studyColumn, insurerColumn, ownerColumn, queueColumn]
+            : queueColumns
+  ).map((column, index) => (index === 0 ? withCheck(column) : column));
 
 
   const openCount = rows.filter((r) => !r.closed).length;
@@ -440,7 +525,7 @@ export default function Worklist() {
   const to = Math.min(visible.length, (safePage + 1) * pageSize);
 
   return (
-    <main aria-keyshortcuts="j k Enter a" className="flex h-full min-h-0 flex-col bg-panel">
+    <main aria-keyshortcuts="j k Enter a" className="flex h-full min-h-0 min-w-0 flex-col bg-panel">
       <div className="flex shrink-0 items-center gap-4 px-6 pt-6">
         <PageTitle count={openCount}>Worklist</PageTitle>
         <Button variant="ghost" className="ml-auto" onClick={() => { reset(); setSelected(new Set()); }}>
@@ -501,13 +586,6 @@ export default function Worklist() {
                 <Kbd>/</Kbd>
               </span>
             </div>
-            {slotAtRisk ? (
-              <RemovableChip onRemove={() => commit({ slotAtRisk: false, page: 0 })}>Slot at risk</RemovableChip>
-            ) : (
-              <Button variant="ghost" aria-pressed={false} onClick={() => commit({ slotAtRisk: true, page: 0 })}>
-                Slot at risk
-              </Button>
-            )}
             <FilterMenu
               title={reasonQueue ? "Reason" : "Status"}
               value={reasonQueue ? reasonFilter : statusFilter}
@@ -545,7 +623,7 @@ export default function Worklist() {
         <Tabs tabs={VIEWS.map((v) => ({ ...v, count: rows.filter((r) => inView(r, v.id, DEMO_NOW, viewer)).length }))} value={view} onChange={changeView} />
       </div>
 
-      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto">
+      <div ref={scrollerRef} className="min-h-0 min-w-0 flex-1 overflow-auto">
         {view === "with_insurer" ? (
           <div>
             {(["Awaiting", "Pended", "Appeal"] as const).map((group) => {
@@ -558,7 +636,8 @@ export default function Worklist() {
                   {grouped.length > 0 && (
                     <DataTable
                       comfortable
-                      className="table-fixed"
+                      compact
+                      className="w-full xl:w-max xl:min-w-full"
                       columns={columns}
                       rows={grouped}
                       getKey={(r) => r.order.id}
@@ -574,7 +653,8 @@ export default function Worklist() {
         ) : (
           <DataTable
             comfortable
-            className="table-fixed"
+            compact
+            className="w-full xl:w-max xl:min-w-full"
             columns={columns}
             rows={pageRows}
             getKey={(r) => r.order.id}
@@ -649,62 +729,114 @@ const EPIC_CHECKED = `Epic · checked ${fmtTableDate(DEMO_NOW)}`;
 
 interface PatientFacts {
   provider: string | null;
-  providerPage: number | null;
-  providerQuote: string | null;
+  providerPhone: string | null;
   memberId: string | null;
-  dobPage: number | null;
-  dobQuote: string | null;
+  policy: string | null;
+  criteria: { met: number; total: number } | null;
+  channel: string | null;
 }
 
 function factsFor(order: Order): PatientFacts {
   const record = buildCaseRecord(order);
   const provider = record.elements.find((element) => element.label === "Ordering provider");
-  const dob = record.elements.find((element) => element.label === "DOB and MRN");
+  const name = provider?.value ? normalizeProvider(provider.value.split(" · ")[0] ?? provider.value).detail : null;
   return {
-    provider: provider?.value ? normalizeProvider(provider.value.split(" · ")[0] ?? provider.value).list : null,
-    providerPage: provider?.cite?.page ?? null,
-    providerQuote: provider?.cite?.quote ?? null,
+    provider: name,
+    providerPhone: phoneForProvider(name),
     memberId: memberIdFor(order)?.value ?? eligibilityFor(order.patient?.mrn)?.memberId ?? null,
-    dobPage: dob?.cite?.page ?? null,
-    dobQuote: dob?.cite?.quote ?? null,
+    policy: record.policyLabel ?? order.policyRef,
+    criteria: criteriaScore(record.criteria),
+    channel: order.channel ? label(CHANNEL_LABEL, order.channel) : null,
   };
 }
 
-function Sourced({ text, page, quote, mono }: { text: string | null; page?: number | null; quote?: string | null; mono?: boolean }) {
-  if (!text) return null;
+function ScanLine({ text }: { text: string }) {
+  const time = text.match(/^(.*) (\d{1,2}:\d{2} [AP]M)$/);
   return (
-    <span className="inline-flex min-w-0 items-center gap-1">
-      <span className={cn("truncate", mono && "font-mono")}>{text}</span>
-      {page ? <CitationChip page={page} excerpt={quote ?? undefined} /> : <SourceTag lastRun={fmtTableDate(DEMO_NOW)} />}
+    <>
+      <span className="block text-caption text-fg-3 xl:hidden">
+        {time ? (
+          <>
+            <span className="block whitespace-nowrap">{time[1]}</span>
+            <span className="block whitespace-nowrap">{time[2]}</span>
+          </>
+        ) : (
+          <span className="block whitespace-nowrap">{text}</span>
+        )}
+      </span>
+      <span className="hidden whitespace-nowrap text-caption text-fg-3 xl:block">{text}</span>
+    </>
+  );
+}
+
+function DueCell({ row }: { row: Row }) {
+  const primary = duePrimary(row);
+  const scan = scanCaption(row);
+  const urgent = row.order.priority !== "Routine";
+  const tip = [primary.text, scan, row.order.scheduleHandwritten ? "Handwritten" : "", SUBMIT_BY_HINT].filter(Boolean).join(". ");
+  return (
+    <Tip content={tip}>
+      <span className="block leading-4">
+        <span className="inline-flex items-center gap-2">
+          <span className={cn("tabular whitespace-nowrap", primary.past && "text-bad")}>{primary.text}</span>
+          {urgent && <Chip>{row.order.priority}</Chip>}
+        </span>
+        {scan && <ScanLine text={scan} />}
+      </span>
+    </Tip>
+  );
+}
+
+function NextStepCell({ row }: { row: Row }) {
+  const step = nextStep(row);
+  if (!step.text && row.flags.length === 0) return null;
+  return (
+    <span className="flex items-center gap-2 max-xl:min-w-0">
+      {row.flags.length > 0 && (
+        <span className="shrink-0">
+          <FlagIcons flags={row.flags} />
+        </span>
+      )}
+      <Tip content={step.tip}>
+        <span className="block whitespace-nowrap max-xl:min-w-0 max-xl:truncate">{step.text}</span>
+      </Tip>
     </span>
   );
 }
 
-function ScanCell({ row }: { row: Row }) {
-  if (!row.order.scheduledAt) return <span className="text-fg-2">No slot</span>;
-  const when = fmtTableDate(parseDemoInstant(row.order.scheduledAt));
-  const atRisk = scanAttention(row) === "At risk";
-  const note = [atRisk ? "At risk" : "", row.order.scheduleHandwritten ? "Handwritten" : "", SUBMIT_BY_HINT].filter(Boolean).join(". ");
+function InsurerCell({ row }: { row: Row }) {
+  const order = row.order;
+  if (!order.insurer) return null;
+  const channel = order.channel ? label(CHANNEL_LABEL, order.channel) : null;
+  const tip = [order.insurer, order.plan, channel].filter(Boolean).join(" · ");
   return (
-    <Tip content={`${when}. ${note}`}>
-      <span className="inline-flex max-w-full items-center gap-2">
-        {atRisk ? (
-          <span aria-label="At risk" className="inline-flex">
-            <StatusDot tone="blocked" />
+    <Tip content={`${tip}. ${EPIC_CHECKED}`}>
+      <span className="block leading-4">
+        <span className="block whitespace-nowrap">{order.insurer}</span>
+        {(order.plan || channel) && (
+          <span className="inline-flex items-center gap-1 whitespace-nowrap text-caption text-fg-2">
+            {order.plan}
+            {channel && <Chip>{channel}</Chip>}
           </span>
-        ) : (
-          <span className="inline-block size-dot shrink-0" aria-hidden />
         )}
-        <span className="min-w-0">
-          <span className="tabular block truncate">{when}</span>
-          {(atRisk || row.order.scheduleHandwritten || row.order.priority === "Urgent") && (
-            <span className={cn("block truncate text-caption", atRisk || row.order.priority === "Urgent" ? "text-bad" : "text-fg-3")}>
-              {[row.order.priority === "Urgent" ? "Urgent" : "", atRisk ? "At risk" : "", row.order.scheduleHandwritten ? "Handwritten" : ""].filter(Boolean).join(" · ")}
-            </span>
-          )}
-        </span>
       </span>
     </Tip>
+  );
+}
+
+function CriteriaMeter({ score }: { score: { met: number; total: number } | null }) {
+  if (!score) return <span className="text-fg-3">—</span>;
+  return (
+    <span className="inline-flex items-center gap-2" aria-label={`${score.met} of ${score.total}`}>
+      <span className="inline-flex gap-1" aria-hidden>
+        {Array.from({ length: score.total }, (_, index) => (
+          <span key={index} className={cn("size-2 rounded-md", index < score.met ? "bg-fg" : "bg-chip")} />
+        ))}
+      </span>
+      <span className="tabular">
+        {score.met}/{score.total}
+      </span>
+    </span>
   );
 }
 
@@ -712,24 +844,24 @@ function PatientCell({ row, facts }: { row: Row; facts: PatientFacts | undefined
   const patient = row.order.patient;
   if (!patient) return <span className="text-fg-2">Unmatched</span>;
   const dob = fmtDob(patient.dob);
-  const type = row.order.channel ? label(CHANNEL_LABEL, row.order.channel) : null;
+  const provider = [facts?.provider, facts?.providerPhone].filter(Boolean).join(" · ");
+  const criteria = facts?.criteria ? `${facts.criteria.met}/${facts.criteria.total}` : null;
   return (
-    <span className="block min-w-0 leading-4">
+    <span className="block leading-4">
       <HoverCard openDelay={300} closeDelay={80}>
         <HoverCardTrigger asChild>
-          <Link to={`/case/${row.order.id}`} className="block truncate font-medium text-fg" onClick={(e) => e.stopPropagation()}>
+          <Link to={`/case/${row.order.id}`} className="block whitespace-nowrap font-medium text-fg" onClick={(e) => e.stopPropagation()}>
             {patient.name}
           </Link>
         </HoverCardTrigger>
         <HoverCardContent onClick={(e) => e.stopPropagation()}>
           <PropertyList
             items={[
-              { label: "DOB", value: <Sourced text={dob} page={facts?.dobPage} quote={facts?.dobQuote} mono /> },
-              { label: "MRN", value: <Sourced text={patient.mrn} page={facts?.dobPage} quote={facts?.dobQuote} mono /> },
-              { label: "Member ID", value: <Sourced text={facts?.memberId ?? null} mono /> },
-              { label: "Ordering provider", value: <Sourced text={facts?.provider ?? null} page={facts?.providerPage} quote={facts?.providerQuote} /> },
-              { label: "Type", value: <Sourced text={type} /> },
-              { label: "Reason", value: row.order.reason || null },
+              { label: "Ordering provider", value: provider || null },
+              { label: "Member ID", value: facts?.memberId ? <span className="font-mono">{facts.memberId}</span> : null },
+              { label: "Policy", value: facts?.policy ?? null },
+              { label: "Criteria", value: criteria ? <span className="tabular">{criteria}</span> : null },
+              { label: "Channel", value: facts?.channel ?? null },
             ]}
           />
           <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-line pt-2 text-caption text-fg-2">
@@ -746,44 +878,14 @@ function PatientCell({ row, facts }: { row: Row; facts: PatientFacts | undefined
           </div>
         </HoverCardContent>
       </HoverCard>
-      <span className="block truncate font-mono text-caption text-fg-2">
+      <span className="block whitespace-nowrap font-mono text-caption text-fg-2 xl:hidden">
+        <span className="block">{dob}</span>
+        <span className="block">{patient.mrn}</span>
+      </span>
+      <span className="hidden whitespace-nowrap font-mono text-caption text-fg-2 xl:block">
         {dob} · {patient.mrn}
       </span>
     </span>
-  );
-}
-
-function ReasonCell({ row }: { row: Row }) {
-  const waiting = row.waiting && row.order.waitingOn ? `Waiting on ${row.order.waitingOn}` : "";
-  const tip = [row.order.reason, waiting].filter(Boolean).join(". ");
-  if (row.stepText) {
-    return (
-      <Tip content={tip}>
-        <span className="block truncate text-fg-2">{row.stepText}</span>
-      </Tip>
-    );
-  }
-  if (actionStatusLabel(row.order.reasonCode) && row.order.reason) {
-    return (
-      <Tip content={tip}>
-        <span className="block truncate">{row.order.reason}</span>
-      </Tip>
-    );
-  }
-  if (!row.reasonChip) return null;
-  if (row.closed) {
-    return (
-      <Tip content={tip}>
-        <span className="block truncate text-fg-2">{row.reasonChip}</span>
-      </Tip>
-    );
-  }
-  return (
-    <Tip content={tip}>
-      <span className="inline-flex max-w-full">
-        <Chip>{row.reasonChip}</Chip>
-      </span>
-    </Tip>
   );
 }
 

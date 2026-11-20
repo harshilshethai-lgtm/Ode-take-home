@@ -1,5 +1,5 @@
 import type { Page } from "playwright";
-import { citedPdfPage, norm, textOfCitedPage, visit } from "./support";
+import { norm, ocrCitedPage, textOfCitedPage, visit } from "./support";
 
 export interface QuoteMiss {
   caseId: string;
@@ -22,29 +22,35 @@ export async function citationMisses(page: Page): Promise<QuoteMiss[]> {
     if (await page.getByRole("heading", { name: "Case not found" }).count()) continue;
     await expandDisclosures(page);
     const file = href.replace(/^\/case\/case-\d+-/, "");
-    const chips = await collectChips(page);
+    const chips = await page.locator("button[data-chip]").evaluateAll((els) =>
+      els.map((el) => ({
+        label: (el.textContent ?? "").replace(/\s+/g, " ").trim(),
+        page: Number(el.getAttribute("data-page")),
+        quote: el.getAttribute("data-quote") ?? "",
+        file: el.getAttribute("data-file") ?? "",
+      })),
+    );
     for (const chip of chips) {
-      if (chip.label === "Policy") {
-        await chip.click(page);
-        const label = await viewerLabel(page);
-        const pdfPage = Number(/^(\d+)/.exec(label)?.[1] ?? "0");
-        await check(misses, href, "Policy", pdfPage, chip.quote, "policy");
+      if (!chip.quote) continue;
+      const citedFile = chip.file || (chip.label === "Policy" ? "policy" : file);
+      if (!Number.isFinite(chip.page) || chip.page < 1) {
+        misses.push({ caseId: href, label: chip.label, page: null, quote: chip.quote, source: "no page on the chip" });
         continue;
       }
-      const pdfPage = citedPdfPage(file, chip.label);
-      if (pdfPage == null) {
-        misses.push({ caseId: href, label: chip.label, page: null, quote: chip.quote, source: "no page in the packet" });
-        continue;
-      }
-      await check(misses, href, chip.label, pdfPage, chip.quote, file);
+      await check(misses, href, chip.label, chip.page, chip.quote, citedFile);
     }
   }
   return misses;
 }
 
 async function check(misses: QuoteMiss[], caseId: string, label: string, pdfPage: number, quote: string, file: string): Promise<void> {
-  const { text, source } = await textOfCitedPage(file, pdfPage);
-  if (!norm(text).includes(norm(quote))) {
+  try {
+    const extracted = await textOfCitedPage(file, pdfPage);
+    if (norm(extracted.text).includes(norm(quote))) return;
+    if (extracted.source === "extracted" && norm(ocrCitedPage(file, pdfPage)).includes(norm(quote))) return;
+    misses.push({ caseId, label, page: pdfPage, quote, source: extracted.source === "extracted" ? "ocr" : extracted.source });
+  } catch (error) {
+    const source = error instanceof Error ? error.message : String(error);
     misses.push({ caseId, label, page: pdfPage, quote, source });
   }
 }
@@ -57,32 +63,3 @@ async function expandDisclosures(page: Page): Promise<void> {
   }
 }
 
-async function collectChips(page: Page): Promise<Array<{ label: string; quote: string; click: (page: Page) => Promise<void> }>> {
-  const buttons = page.getByRole("button").filter({ hasText: /^(fax )?p\.\d+$|^Policy$/ });
-  const count = await buttons.count();
-  const chips: Array<{ label: string; quote: string; index: number }> = [];
-  for (let i = 0; i < count; i++) {
-    const button = buttons.nth(i);
-    const label = ((await button.innerText()) ?? "").trim();
-    await button.hover();
-    const tip = page.getByRole("tooltip");
-    await tip.waitFor({ state: "visible", timeout: 1_500 }).catch(() => {});
-    const tipText = (await tip.textContent().catch(() => "")) ?? "";
-    const quote = /“([^”]+)”/.exec(tipText)?.[1] ?? "";
-    await page.mouse.move(0, 0);
-    if (quote) chips.push({ label, quote, index: i });
-  }
-  return chips.map((chip) => ({
-    label: chip.label,
-    quote: chip.quote,
-    click: async (current) => {
-      await current.getByRole("button").filter({ hasText: /^(fax )?p\.\d+$|^Policy$/ }).nth(chip.index).click();
-    },
-  }));
-}
-
-async function viewerLabel(page: Page): Promise<string> {
-  const label = page.locator("span.tabular").filter({ hasText: /^\d+ of / }).first();
-  await label.waitFor({ state: "visible", timeout: 8_000 });
-  return ((await label.innerText()) ?? "").trim();
-}

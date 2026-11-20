@@ -10,7 +10,6 @@ describe("worklist query", () => {
       insurer: "Federation Health",
       policy: null,
       hideWaiting: true,
-      slotAtRisk: true,
       q: "Kirk",
       sort: "received" as const,
       dir: "desc" as const,
@@ -18,7 +17,7 @@ describe("worklist query", () => {
     };
     const params = serializeWorklistUrl(state, "admin");
     expect(params.toString()).toBe(
-      "tab=clinical&reason=Missing+docs&insurer=Federation+Health&waiting=hidden&risk=slot&q=Kirk&sort=-received&page=3",
+      "tab=clinical&reason=Missing+docs&insurer=Federation+Health&waiting=hidden&q=Kirk&sort=-received&page=3",
     );
     expect(parseWorklistUrl(params, "admin")).toEqual(state);
   });
@@ -32,9 +31,8 @@ describe("worklist query", () => {
         insurer: null,
         policy: null,
         hideWaiting: false,
-        slotAtRisk: false,
         q: "",
-        sort: "appointment",
+        sort: "due",
         dir: "asc",
         page: 0,
       },

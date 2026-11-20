@@ -1,5 +1,7 @@
 // Configurable modules from PRD §Rule engine, §Handoff after a coordinator fix, §Other configurable modules.
 
+import { QUEUE_TARGET_HOURS } from "@/data/operations/queue";
+
 export interface SettingsModule {
   id: string;
   name: string;
@@ -36,7 +38,7 @@ export const OPERATIONS_MODULES: SettingsModule[] = [
     name: "Time-risk policy",
     configurable:
       "Each insurer's usual turnaround, when an order turns At risk, when to suggest releasing the slot, and the SLA per status.",
-    defaultValue: "At risk when the scan is inside the insurer's turnaround + 1 day",
+    defaultValue: `Coordinator ${QUEUE_TARGET_HOURS.coordinator}h, nurse ${QUEUE_TARGET_HOURS.nurse}h. At risk inside turnaround + 1 day`,
     why: "Cancelled scans are the real cost.",
   },
   {

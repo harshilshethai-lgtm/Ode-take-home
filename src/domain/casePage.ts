@@ -1,6 +1,9 @@
 // Presentation for the case page. Status, reasons and transitions stay in the prior-auth model.
 
-import type { ExtractRow, CaseRecord } from "@/domain/caseRecord";
+import type { ExtractRow, CaseRecord, Cite } from "@/domain/caseRecord";
+import { pdfPageFor } from "@/domain/documents";
+import { channelLine, policyFieldCite } from "@/domain/casePane";
+import { contactFor } from "@/domain/directory";
 import { memberIdFor } from "@/domain/memberId";
 import { actionsFor, type StatusAction } from "@/domain/priorAuth/actions";
 import type { ReasonCode, UserRole } from "@/domain/priorAuth/types";
@@ -9,6 +12,8 @@ import type { CheckRow, ReviewPanel } from "@/domain/review/types";
 import type { Order } from "@/domain/types";
 import { parseDemoInstant } from "@/lib/demoClock";
 import { fmtTableDate } from "@/lib/format";
+import { PLAN_TYPE_LABEL, label } from "@/lib/labels";
+import { eligibilityFor } from "@/lib/mocks/eligibility";
 
 export interface CaseButton {
   id: string;
@@ -90,7 +95,7 @@ export interface OrderField {
   value: string;
   mono?: boolean;
   muted?: boolean;
-  cite?: { docId: string; page: number; quote?: string };
+  cite?: { docId: string; page: number; quote?: string; label?: string };
   origin?: "epic";
   lastRun?: string;
   handwritten?: boolean;
@@ -106,6 +111,15 @@ function ranLabel(iso: string | undefined): string | undefined {
   return fmtTableDate(parseDemoInstant(iso));
 }
 
+function memberCite(record: CaseRecord, page: number, quote: string): Cite {
+  const doc =
+    record.documents.find((item) => item.pdfPageByDocPage?.includes(page) || pdfPageFor(item, 1) === page) ??
+    record.documents[0];
+  const mapped = doc?.pdfPageByDocPage?.indexOf(page) ?? -1;
+  const docPage = mapped >= 0 ? mapped + 1 : doc ? Math.max(1, page - doc.filePageStart + 1) : page;
+  return { docId: doc?.id ?? "packet", page: docPage, quote };
+}
+
 export function orderFields(order: Order, record: CaseRecord, panel: ReviewPanel): OrderField[] {
   const provider = record.elements.find((item) => item.label === "Ordering provider");
   const providerName = provider ? normalizeProvider(provider.value) : null;
@@ -115,21 +129,27 @@ export function orderFields(order: Order, record: CaseRecord, panel: ReviewPanel
   const cardNamed = Boolean(card) || /card/i.test(String(order.detail.source ?? ""));
   const eligibilityFailed = panel.coverage.some((row) => row.id === "CV-1" && row.result === "NOT_MET");
   const pending = order.reasonCode === "INSURER_MISMATCH" || eligibilityFailed;
-  const insurance = [order.insurer, member?.value].filter(Boolean).join(" · ") || "Not on the order";
+  const plan = order.plan ?? (eligibilityFor(order.patient?.mrn)?.planType ? label(PLAN_TYPE_LABEL, eligibilityFor(order.patient?.mrn)?.planType ?? "") : null);
+  const insurance = [order.insurer, plan, member?.value].filter(Boolean).join(" · ") || "Not on the order";
+  const providerContact = contactFor(provider?.value);
+  const providerValue = providerName ? (providerName.parsed ? providerName.detail : providerName.raw) : "Not on the order";
+  const providerBits = [providerValue !== "Not on the order" ? providerValue : "", providerContact?.npi ? `NPI ${providerContact.npi}` : "", providerContact?.phone ?? ""].filter(Boolean);
+  const examName = order.side && order.study ? `${order.side} · ${order.study}` : order.study;
   const fields: OrderField[] = [
-    { label: "Exam", value: [order.study, order.cpt].filter(Boolean).join(" · ") || "Not on the order" },
-    { label: "Urgency", value: order.priority },
+    { label: "Exam", value: [examName, order.cpt].filter(Boolean).join(" · ") || "Not on the order" },
+    { label: "Diagnosis", value: "Not on the order", muted: true },
+    { label: "Clinical question", value: "Not on the order", muted: true },
+    { label: "Priority", value: order.priority },
     {
       label: "Ordering provider",
-      value: providerName ? (providerName.parsed ? providerName.detail : providerName.raw) : "Not on the order",
+      value: providerBits.join(" · ") || "Not on the order",
       unparsed: providerName ? !providerName.parsed : false,
       ...(provider?.cite ? { cite: provider.cite } : {}),
     },
-    { label: "MRN", value: order.patient?.mrn ?? "Not on the order", mono: true },
     {
-      label: "Insurance on order",
+      label: "Insurance",
       value: insurance,
-      ...(member?.source === "pdf" && member.page ? { cite: { docId: "packet", page: member.page, quote: member.quote } } : {}),
+      ...(member?.source === "pdf" && member.page && member.quote ? { cite: memberCite(record, member.page, member.quote) } : {}),
       ...(member?.source === "epic" ? { origin: "epic" as const, lastRun: ranLabel(member.ranAt) } : {}),
     },
   ];
@@ -146,13 +166,57 @@ export function orderFields(order: Order, record: CaseRecord, panel: ReviewPanel
     const named = order.detail.insurerB ? String(order.detail.insurerB) : "Card scanned";
     fields.push({ label: "Insurance on card", value: named });
   }
+  const policyCite = pending ? null : policyFieldCite(order);
   fields.push({
     label: "Policy",
     value: pending ? "Pending coverage check" : (order.policyRef ?? order.plan ?? "Not on the order"),
     muted: pending,
+    ...(policyCite ? { cite: policyCite } : {}),
   });
+  const channel = channelLine(order);
+  const policyField = fields.find((field) => field.label === "Policy");
+  if (policyField && channel.cite && !policyField.cite) policyField.cite = channel.cite;
+  fields.push({
+    label: "Channel",
+    value: channel.value,
+    ...(channel.cite ? { cite: channel.cite } : {}),
+  });
+  for (const extra of REQUEST_OVERLAY[order.id] ?? []) {
+    const index = fields.findIndex((field) => field.label === extra.label);
+    if (index >= 0) fields[index] = { ...fields[index], ...extra };
+    else fields.push(extra);
+  }
   return fields;
 }
+
+const cite = (docId: string, page: number, quote: string): Cite => ({ docId, page, quote });
+
+/** Packet lines the generic order row cannot see. Merged by label. */
+const REQUEST_OVERLAY: Record<string, OrderField[]> = {
+  "case-1-kirk": [
+    { label: "Exam", value: "Right · MRI lumbar spine · 72148", cite: cite("kirk-order", 1, "MRI LUMBAR SPINE WO CONTRAST [72148]") },
+    { label: "Diagnosis", value: "M54.16 Radiculopathy, lumbar region", muted: false, cite: cite("kirk-order", 1, "M54.16 Radiculopathy, lumbar region") },
+    { label: "Clinical question", value: "Disc herniation and nerve root compression", muted: false, cite: cite("kirk-note", 1, "evaluate for disc herniation and nerve root compression") },
+    { label: "Priority", value: "Routine", origin: "epic" },
+    { label: "Ordering provider", value: "Leonard McCoy, MD · NPI 1700000017 · (410) 555-0188", cite: cite("kirk-order", 1, "Leonard McCoy, MD (NPI 1700000017)") },
+  ],
+  "case-2-scott": [
+    { label: "Exam", value: "Right · MRI knee · 73721", cite: cite("scott-fax", 2, "MRI R knee w/o contrast") },
+    { label: "Diagnosis", value: "M25.561 R knee pain", muted: false, cite: cite("scott-fax", 2, "R knee pain M25.561") },
+    { label: "Clinical question", value: "Rule out medial meniscus tear", muted: false, cite: cite("scott-fax", 2, "r/o medial meniscus tear") },
+    { label: "Priority", value: "Routine", cite: cite("scott-fax", 2, "Routine") },
+    { label: "Ordering provider", value: "L. McCoy, MD · NPI 1700000017 · (410) 555-0188", cite: cite("scott-fax", 1, "(410) 555-0188") },
+    { label: "Insurance", value: "Ferengi Benefit Group · Commercial HMO · FBG-0047-1979", cite: cite("scott-fax", 2, "FBG-0047-1979") },
+  ],
+  "case-3-sulu": [
+    { label: "Exam", value: "Right · MRI shoulder · 73221", cite: cite("sulu-order", 1, "MRI SHOULDER RIGHT WO CONTRAST [73221]") },
+    { label: "Diagnosis", value: "M25.511 Pain in right shoulder", muted: false, cite: cite("sulu-order", 1, "M25.511 Pain in right shoulder") },
+    { label: "Clinical question", value: "R shoulder pain for 3 weeks after fencing", muted: false, cite: cite("sulu-note", 1, "R shoulder pain x 3 wks after fencing.") },
+    { label: "Priority", value: "Routine", cite: cite("sulu-order", 1, "Priority: Routine") },
+    { label: "Ordering provider", value: "Leonard McCoy, MD · NPI 1700000017 · (410) 555-0188", cite: cite("sulu-order", 1, "McCoy, Leonard, MD") },
+    { label: "Insurance", value: "Andorian Life · Ice Planet Standard EPO · AL-1701-0914", cite: cite("sulu-order", 1, "AL-1701-0914") },
+  ],
+};
 
 export interface DocRow {
   id: string;

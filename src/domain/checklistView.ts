@@ -5,6 +5,7 @@
 import { buildSeedDb } from "@/data/rules/seed";
 import type { CaseRecord } from "@/domain/caseRecord";
 import { buildCaseRecord } from "@/domain/caseRecord";
+import { pdfPageFor } from "@/domain/documents";
 import type { CheckResult, CheckRow, ReviewPanel } from "@/domain/review/types";
 import { daysBetween } from "@/domain/rules/dates";
 import { historyReviewed, study, symptomOnset, treatment } from "@/domain/rules/factBuilders";
@@ -12,6 +13,7 @@ import { evaluateOrder } from "@/domain/rules/engine";
 import type { CriterionResult, CriterionStatus, EvaluationOutcome, Fact, FailureType, RulesSnapshot } from "@/domain/rules/types";
 import type { Order } from "@/domain/types";
 import type { ReasonDetail } from "@/domain/priorAuth/types";
+import { presentWaivers, type WaiverRow } from "@/domain/casePane";
 import { versionHref } from "@/lib/evalNotice";
 import { DEMO_NOW } from "@/data/orders";
 import { parseDemoInstant } from "@/lib/demoClock";
@@ -20,10 +22,13 @@ import { CRITERION_STATUS_COUNT, NOT_MET_TAG, policyVersionLabel } from "@/lib/l
 
 export interface CitedQuote {
   quote: string;
+  /** Page inside the document. */
   page: number;
   docId: string;
   /** Packet file key, or "policy" for the insurer PDF. */
   file: string;
+  /** Page in that file. Quote checks read this page. */
+  pdfPage?: number;
 }
 
 export interface EvidenceLine {
@@ -39,7 +44,7 @@ export interface CriterionRowModel {
   label: string;
   fact: string;
   status: CriterionStatus;
-  /** "Fixable with records", "Clinical", or the exception name when waived. */
+  /** Fixability tag, or the exception name when waived. */
   tag: string | null;
   close: boolean;
   excerpt: string | null;
@@ -64,6 +69,7 @@ export interface ChecklistModel {
   /** Shown instead of criterion rows when coverage has not been resolved. */
   waiting: string | null;
   dataChecks: { rows: DataCheckModel[]; defaultOpen: boolean; count: string } | null;
+  waivers: WaiverRow[];
   policyLabel: string | null;
   policyHref: string | null;
 }
@@ -264,19 +270,20 @@ function extractedFacts(order: Order): { facts: Fact[]; serviceDate: string; pla
     };
   }
   if (order.id === "case-2-scott") {
+    const documented = order.faxAttached === true;
     return {
       serviceDate: "2026-11-10",
       planType: "commercial_hmo",
       laterality: "right",
       facts: [
-        symptomOnset("2026-09-22", { excerpt: "R knee pain and clicking x 7 wks", doc: "packet" }),
+        symptomOnset("2026-09-22", { excerpt: "R knee pain and clicking x 7 wks", doc: "scott-fax" }),
         treatment({
           modality: "physical_therapy",
-          start: "2026-09-29",
-          end: "2026-11-10",
-          sourceType: "patient_reported",
-          excerpt: "about six weeks",
-          doc: "packet",
+          start: documented ? "2026-09-29" : "2026-09-29",
+          end: documented ? "2026-11-06" : "2026-11-10",
+          sourceType: documented ? "pt_note" : "patient_reported",
+          excerpt: documented ? "09/29/2026 to 11/06/2026" : "about six weeks",
+          doc: documented ? "scott-pt" : "scott-fax",
         }),
         study({
           studyType: "xray",
@@ -284,8 +291,9 @@ function extractedFacts(order: Order): { facts: Fact[]; serviceDate: string; pla
           date: "2026-09-24",
           laterality: "right",
           excerpt: "XR KNEE RIGHT 3 VIEWS, 09/24/2026",
-          doc: "packet",
+          doc: "scott-fax",
         }),
+        ...(documented ? [historyReviewed("2026-11-10", { excerpt: "No knee MRI on record.", doc: "epic" })] : []),
       ],
     };
   }
@@ -322,11 +330,15 @@ function failureType(snapshot: RulesSnapshot | null, key: string): FailureType |
   return undefined;
 }
 
-function tagFor(status: CriterionStatus, type: FailureType | undefined, exceptionName: string | null): string | null {
+function tagFor(status: CriterionStatus, key: string, fix: string | null, exceptionName: string | null): string | null {
   if (status === "waived") return exceptionName;
-  if (status !== "not_met") return null;
-  if (type === "fixable") return NOT_MET_TAG.fixable;
-  return NOT_MET_TAG.clinical;
+  if (status !== "not_met" && status !== "unknown") return null;
+  // A named document at a named source would change the result. Duration and missing-study tags do not.
+  if (fix) return NOT_MET_TAG.fixable;
+  if ((key === "symptom_duration" || key === "conservative_care") && status === "not_met") return NOT_MET_TAG.time;
+  if (key === "prior_xray") return NOT_MET_TAG.order;
+  if (status === "not_met") return NOT_MET_TAG.clinical;
+  return null;
 }
 
 function mentions(detail: string, key: string): boolean {
@@ -347,7 +359,13 @@ function fixFor(order: Order, key: string, status: CriterionStatus, type: Failur
   return `Get ${match.document} from ${match.source}`;
 }
 
-function packetCites(record: CaseRecord, key: string): Array<{ source: string; quote: string; page: number }> {
+function located(record: CaseRecord, docId: string, page: number): { file: string; pdfPage: number } {
+  const doc = record.documents.find((item) => item.id === docId);
+  if (!doc) return { file: packetFile(record), pdfPage: page };
+  return { file: doc.file, pdfPage: pdfPageFor(doc, page) ?? page };
+}
+
+function packetCites(record: CaseRecord, key: string): Array<{ source: string; quote: string; page: number; docId: string; file: string; pdfPage: number }> {
   const byId: Record<string, string> = {
     "1": "symptom_duration",
     "2": "conservative_care",
@@ -359,10 +377,13 @@ function packetCites(record: CaseRecord, key: string): Array<{ source: string; q
     "4": "no_recent_mri",
   };
   const row = record.criteria.find((item) => (byId[item.id] ?? item.id) === key);
-  return (row?.cites ?? []).map((cite) => ({ source: row?.line ?? "Record", quote: cite.quote, page: cite.page }));
+  return (row?.cites ?? []).map((cite) => {
+    const place = located(record, cite.docId, cite.page);
+    return { source: row?.line ?? "Record", quote: cite.quote, page: cite.page, docId: cite.docId, ...place };
+  });
 }
 
-function evidenceFromFacts(result: CriterionResult, record: CaseRecord, file: string): EvidenceLine[] {
+function evidenceFromFacts(result: CriterionResult, record: CaseRecord, _file: string): EvidenceLine[] {
   if (result.status === "unknown" || isAbsent(result.reason)) {
     return [{ source: "Packet", value: "Not found in the packet", cite: null, checked: null }];
   }
@@ -371,7 +392,7 @@ function evidenceFromFacts(result: CriterionResult, record: CaseRecord, file: st
     return cites.map((cite) => ({
       source: cite.source,
       value: cite.quote,
-      cite: { quote: cite.quote, page: cite.page, docId: "packet", file },
+      cite: { quote: cite.quote, page: cite.page, docId: cite.docId, file: cite.file, pdfPage: cite.pdfPage },
       checked: null,
     }));
   }
@@ -420,23 +441,41 @@ function fromEngine(order: Order, outcome: EvaluationOutcome, record: CaseRecord
       : null;
     const need = needDays(snapshot, result.criterionKey);
     const fact = factLine(result, facts, serviceDate, need);
+    const shown = overrideFact(order, result.criterionKey, result.status, fact);
+    const fix = fixFor(order, result.criterionKey, result.status, type);
+    let evidence = evidenceFromFacts(result, record, file);
+    if (order.faxAttached && result.criterionKey === "no_recent_mri" && result.status === "met") {
+      evidence = [{ source: "Epic", value: "None on record", cite: null, checked: { system: "epic", lastRun: "just now" } }];
+    }
     return {
       id: result.criterionKey,
       label: result.displayLabel,
-      fact: fact.text,
+      fact: shown.text,
       status: result.status,
-      tag: tagFor(result.status, type, exception),
-      close: fact.close,
+      tag: tagFor(result.status, result.criterionKey, fix, exception),
+      close: shown.close,
       excerpt: result.excerpt || null,
       policyCite:
         result.excerpt && page
           ? { quote: result.excerpt, page, docId: "policy", file: "policy" }
           : null,
-      evidence: evidenceFromFacts(result, record, file),
+      evidence,
       reason: reasonText(result.reason),
-      fix: fixFor(order, result.criterionKey, result.status, type),
+      fix,
     };
   });
+}
+
+function overrideFact(
+  order: Order,
+  key: string,
+  status: CriterionResult["status"],
+  fact: { text: string; close: boolean },
+): { text: string; close: boolean } {
+  if (!order.faxAttached || status !== "met") return fact;
+  if (key === "conservative_care") return { text: "39 days of documented PT", close: false };
+  if (key === "no_recent_mri") return { text: "None on record", close: false };
+  return fact;
 }
 
 function fromPanel(order: Order, panel: ReviewPanel, record: CaseRecord, snapshot: RulesSnapshot | null): CriterionRowModel[] {
@@ -447,34 +486,36 @@ function fromPanel(order: Order, panel: ReviewPanel, record: CaseRecord, snapsho
   return rows.map((row) => {
     const status = FROM_CHECK[row.result];
     const type = failureType(snapshot, row.id);
+    const fix = fixFor(order, row.id, status, type);
     const absent = isAbsent(row.found) || isAbsent(row.quote ?? "");
     const excerpt = snapshot?.criteria.find((c) => c.key === row.id)?.excerpt ?? null;
     const exception = status === "waived" ? (row.found.replace(/^Waiver:\s*/i, "") || waiver?.label.replace(/^Waiver:\s*/i, "") || null) : null;
     const cites = packetCites(record, row.id);
+    const fallback = row.docId ? located(record, row.docId, row.page ?? 1) : { file, pdfPage: row.page ?? 1 };
     const evidence: EvidenceLine[] = absent
       ? [{ source: "Packet", value: "Not found in the packet", cite: null, checked: null }]
       : cites.length > 0
         ? cites.map((cite) => ({
             source: cite.source,
             value: cite.quote,
-            cite: { quote: cite.quote, page: cite.page, docId: "packet", file },
+            cite: { quote: cite.quote, page: cite.page, docId: cite.docId, file: cite.file, pdfPage: cite.pdfPage },
             checked: null,
           }))
         : row.quote && row.page
-          ? [{ source: "Record", value: row.found, cite: { quote: row.quote, page: row.page, docId: row.docId ?? "packet", file }, checked: null }]
+          ? [{ source: "Record", value: row.found, cite: { quote: row.quote, page: row.page, docId: row.docId ?? "packet", file: fallback.file, pdfPage: fallback.pdfPage }, checked: null }]
           : [];
     return {
       id: row.id,
       label: row.label,
       fact: absent ? "Not found in the packet" : row.found,
       status,
-      tag: tagFor(status, type, exception),
+      tag: tagFor(status, row.id, fix, exception),
       close: false,
       excerpt,
       policyCite: excerpt && page ? { quote: excerpt, page, docId: "policy", file: "policy" } : null,
       evidence,
       reason: absent ? "Not found in the packet." : row.found,
-      fix: fixFor(order, row.id, status, type),
+      fix,
     };
   });
 }
@@ -544,6 +585,7 @@ export function presentChecklist(order: Order, panel: ReviewPanel, record: CaseR
           count: passed === checks.length ? `${checks.length}/${checks.length} passed` : `${passed}/${checks.length}`,
         }
       : null,
+    waivers: presentWaivers(order).map((row) => ({ ...row, file: packetFile(record) })),
     policyLabel: policy?.label ?? null,
     policyHref: policy?.href ?? null,
   };
@@ -605,13 +647,23 @@ export interface QuoteCheck {
 export function displayedQuotes(model: ChecklistModel, card: EvidenceLine[]): QuoteCheck[] {
   const out: QuoteCheck[] = [];
   const push = (cite: CitedQuote | null) => {
-    if (cite?.quote) out.push({ quote: cite.quote, page: cite.page, file: cite.file });
+    if (cite?.quote) out.push({ quote: cite.quote, page: cite.pdfPage ?? cite.page, file: cite.file });
   };
   for (const row of model.criteria?.rows ?? []) {
     push(row.policyCite);
     for (const line of row.evidence) push(line.cite);
   }
   for (const row of model.dataChecks?.rows ?? []) push(row.cite);
+  for (const row of model.waivers) {
+    if (row.cite?.quote) {
+      push({
+        quote: row.cite.quote,
+        page: row.cite.checkPage ?? row.cite.page,
+        docId: row.cite.docId,
+        file: row.file ?? "packet",
+      });
+    }
+  }
   for (const line of card) push(line.cite);
   return out;
 }
@@ -619,7 +671,6 @@ export function displayedQuotes(model: ChecklistModel, card: EvidenceLine[]): Qu
 /** Evidence card: consistency and coverage only. Criterion evidence lives on the checklist row. */
 export function presentEvidenceCard(order: Order, panel: ReviewPanel): EvidenceLine[] {
   const record = buildCaseRecord(order);
-  const file = packetFile(record);
   const criterionIds = new Set(panel.checks.criteria.rows.map((row) => row.id));
   const lines: EvidenceLine[] = [];
   for (const block of panel.evidence) {
@@ -629,10 +680,11 @@ export function presentEvidenceCard(order: Order, panel: ReviewPanel): EvidenceL
         lines.push({ source: row.source, value: "Not found in the packet", cite: null, checked: null });
         continue;
       }
+      const place = located(record, row.docId, row.page);
       lines.push({
         source: row.source,
         value: row.value,
-        cite: row.quote ? { quote: row.quote, page: row.page, docId: row.docId, file } : null,
+        cite: row.quote ? { quote: row.quote, page: row.page, docId: row.docId, file: place.file, pdfPage: place.pdfPage } : null,
         checked: null,
       });
     }
@@ -640,14 +692,41 @@ export function presentEvidenceCard(order: Order, panel: ReviewPanel): EvidenceL
   return lines;
 }
 
+const SUMMARY_STOP = new Set(["a", "an", "the", "on", "from", "to", "of", "and", "or", "for", "in", "is", "are", "with", "by"]);
+
+function repeats(verdict: string, next: string): boolean {
+  const left = new Set(
+    verdict
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, " ")
+      .trim()
+      .split(/\s+/)
+      .filter((word) => word && !SUMMARY_STOP.has(word)),
+  );
+  const right = next
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, " ")
+    .trim()
+    .split(/\s+/)
+    .filter((word) => word && !SUMMARY_STOP.has(word));
+  if (right.length === 0 || left.size === 0) return false;
+  const shared = right.filter((word) => left.has(word)).length;
+  return shared / right.length >= 0.6 || shared / left.size >= 0.6;
+}
+
 export function composeAiSummary(explanation: string, action: string): string {
   const stripped = explanation.replace(/\s*Suggested:\s*[^.]+\.?\s*/gi, " ").replace(/\s+/g, " ").trim();
   const verdict = firstSentence(stripped);
-  const next = firstSentence(action.trim());
+  let next = firstSentence(action.trim());
+  // "Waiting on PT notes… Chase PT notes…" is one fact said twice. Use the next fact in the explanation.
+  if (verdict && next && repeats(verdict, next)) {
+    const after = stripped.slice(stripped.indexOf(verdict) + verdict.length).trim();
+    const second = firstSentence(after);
+    next = second && !repeats(verdict, second) ? second : "";
+  }
   if (!verdict) return withPeriod(next);
   if (!next) return withPeriod(verdict);
-  const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
-  const combined = norm(verdict).includes(norm(next)) || norm(next).includes(norm(verdict)) ? withPeriod(verdict) : `${withPeriod(verdict)} ${withPeriod(next)}`;
+  const combined = `${withPeriod(verdict)} ${withPeriod(next)}`;
   // "Dr." would count as its own sentence in the copy budget.
   return combined.replace(/\b(Dr|Mr|Mrs|Ms|St)\.(?=\s)/g, "$1");
 }

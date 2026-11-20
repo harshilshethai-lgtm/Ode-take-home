@@ -96,9 +96,11 @@ export function formatFixBy(at: Date, now: Date = DEMO_NOW): string {
   return at.getTime() < now.getTime() ? `Past due · ${day}` : `Submit by ${day}`;
 }
 
-export const SUBMIT_BY_HINT = "Scan time minus the insurer's median decision time, minus 4 hours.";
+export const SUBMIT_BY_HINT = "Scan time minus the insurer's median decision time, minus 4 business hours.";
 
-/** Next status check. Future checks read "in 4h"; one the clock has passed reads as ago. */
+/** Next status check. A time the clock has passed is overdue, never "ago". */
 export function nextCheckLabel(value: string, now: Date = DEMO_NOW): string {
-  return relativeToClock(value, now);
+  const at = parseDemoInstant(value);
+  if (at.getTime() < now.getTime()) return "Overdue";
+  return relativeToClock(at, now);
 }

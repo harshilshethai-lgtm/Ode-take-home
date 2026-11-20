@@ -9,6 +9,10 @@ export interface InsurerConfig {
   urgent: boolean;
   /** API status cadence, in hours. */
   statusEveryHours: number;
+  /** Median hours from submission to an insurer decision. */
+  medianDecisionHours: number;
+  /** Decision time counts only on business days, and a deadline never lands on a weekend. */
+  businessDaysOnly: boolean;
   /** Portal automation checks, local time, business days only. */
   portalTimes: readonly string[];
   /** Business days a pend may sit before it becomes More info requested. */
@@ -30,6 +34,8 @@ const api = (name: string, extra: Partial<InsurerConfig> = {}): InsurerConfig =>
   mode: "mock",
   urgent: false,
   statusEveryHours: 4,
+  medianDecisionHours: 48,
+  businessDaysOnly: false,
   portalTimes: ["08:00", "14:00"],
   pendDays: 5,
   appealLevels: 2,
@@ -42,17 +48,26 @@ const api = (name: string, extra: Partial<InsurerConfig> = {}): InsurerConfig =>
 });
 
 const portal = (name: string, extra: Partial<InsurerConfig> = {}): InsurerConfig =>
-  api(name, { channel: "portal_automation", ...extra });
+  api(name, { channel: "portal_automation", businessDaysOnly: true, ...extra });
 
 /** Real or mock is chosen here, per insurer. The pipeline reads this and never branches on the payer itself. */
 export const INSURER_CONFIG: Record<string, InsurerConfig> = {
-  "Federation Health": api("Federation Health", { urgent: true, cptFamilies: [["72148", "72149", "72158"]] }),
-  "Vulcan Science Mutual": api("Vulcan Science Mutual"),
-  "Klingon Assurance": api("Klingon Assurance"),
-  "Bajoran Health Plan": api("Bajoran Health Plan"),
-  "Ferengi Benefit Group": portal("Ferengi Benefit Group", { appealLevels: 1 }),
-  "Andorian Life": portal("Andorian Life", { appealLevels: 2 }),
+  "Federation Health": api("Federation Health", { urgent: true, medianDecisionHours: 18, cptFamilies: [["72148", "72149", "72158"]] }),
+  "Vulcan Science Mutual": api("Vulcan Science Mutual", { medianDecisionHours: 22 }),
+  "Klingon Assurance": api("Klingon Assurance", { medianDecisionHours: 30 }),
+  "Bajoran Health Plan": api("Bajoran Health Plan", { medianDecisionHours: 26 }),
+  "Ferengi Benefit Group": portal("Ferengi Benefit Group", { appealLevels: 1, medianDecisionHours: 70 }),
+  "Andorian Life": portal("Andorian Life", { appealLevels: 2, medianDecisionHours: 40 }),
 };
+
+export function businessDaysOnly(name: string | null): boolean {
+  if (!name) return false;
+  try {
+    return configFor(name).businessDaysOnly;
+  } catch {
+    return false;
+  }
+}
 
 export function configFor(name: string, override?: Record<string, InsurerConfig>): InsurerConfig {
   const table = override ?? INSURER_CONFIG;

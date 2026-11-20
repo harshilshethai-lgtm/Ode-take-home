@@ -1,12 +1,11 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
-import { FileText, Image, Sparkles } from "lucide-react";
+import { Check, FileText, Image, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Chip } from "@/components/ui/chip";
 import { CitationChip } from "@/components/ui/citation-chip";
 import { SourceTag } from "@/components/ui/source-tag";
-import { Tip } from "@/components/ui/tooltip";
-import { ChecklistCard, EvidenceCard, StatusMark } from "@/components/case/ChecklistCard";
+import { ClinicalFacts } from "@/components/case/ClinicalFacts";
+import { ChecklistCard, EvidenceCard } from "@/components/case/ChecklistCard";
 import { RulesChangedBanner } from "@/components/evaluation/RulesChangedBanner";
 import {
   caseButtons,
@@ -17,13 +16,13 @@ import {
   type DocRow,
   type OrderField,
 } from "@/domain/casePage";
-import { composeAiSummary, presentChecklist, presentEvidenceCard } from "@/domain/checklistView";
-import { CRITERION_STATUS_LABEL, label, policyVersionLabel } from "@/lib/labels";
+import { activityLine, blockersFor, clinicalFacts, packetModel, slotWarning, type BlockerItem, type PacketModel } from "@/domain/casePane";
+import { presentChecklist, presentEvidenceCard } from "@/domain/checklistView";
+import { caseSummaryText } from "@/domain/guidance";
+import { policyVersionLabel } from "@/lib/labels";
 import { versionHref } from "@/lib/evalNotice";
-import type { CriterionStatus } from "@/domain/rules/types";
 import { actionsFor } from "@/domain/priorAuth/actions";
 import { toOrderStatus, toStatusId } from "@/domain/priorAuth/legacy";
-import { explainReason, reasonChip, whatToDo } from "@/domain/priorAuth/reasons";
 import { renderActions } from "@/domain/priorAuth/render";
 import { AuthState, createOrder, readAudits, recordSideEffect, transitionOrder } from "@/domain/priorAuth/store";
 import type { Effect, OrderSnapshot, UserRole } from "@/domain/priorAuth/types";
@@ -32,8 +31,7 @@ import { portalPacketFor } from "@/domain/portalPacket";
 import type { ReviewPanel } from "@/domain/review/types";
 import type { Order } from "@/domain/types";
 import { cn } from "@/lib/cn";
-import { SUBMIT_BY_HINT, parseDemoInstant } from "@/lib/demoClock";
-import { fmtScanNumeric, fmtTableDate } from "@/lib/format";
+import { fmtTableDate } from "@/lib/format";
 import { PEOPLE_BY_ID } from "@/data/people";
 import { useOrderCheck } from "@/lib/useOrderCheck";
 import { InsurerBlock } from "@/components/case/InsurerBlock";
@@ -53,10 +51,6 @@ export interface AppliedCase {
   linkedApproval?: boolean;
 }
 
-function scanStamp(iso: string): string {
-  return fmtScanNumeric(parseDemoInstant(iso));
-}
-
 export function CaseLayout({
   order,
   record,
@@ -67,6 +61,7 @@ export function CaseLayout({
   onApplied,
   insurer,
   onCheckNow,
+  onInboundFax,
 }: {
   order: Order;
   record: CaseRecord;
@@ -77,6 +72,7 @@ export function CaseLayout({
   onApplied: (result: AppliedCase) => void;
   insurer?: InsurerPanelModel | null;
   onCheckNow?: () => void;
+  onInboundFax?: () => void;
 }) {
   const check = useOrderCheck(order.orderNumber);
   const base = presentChecklist(order, panel, record);
@@ -87,40 +83,65 @@ export function CaseLayout({
   const evidence = presentEvidenceCard(order, panel);
   const docs = documentRows(record, panel);
   const fields = orderFields(order, record, panel);
+  const withInsurer = order.status === "submitted" || order.status === "approved";
+  const criteria = checklist.criteria?.rows ?? [];
+  const allMet = criteria.length > 0 && criteria.every((row) => row.status === "met" || row.status === "waived");
+  const facts = clinicalFacts(order, allMet);
+  const packet = packetModel(order, record);
+  const activity = panel.activity.filter((entry) => !entry.from || entry.from !== entry.to || Boolean(entry.reason));
+  const policy = checklist.policyLabel && checklist.policyHref ? { label: checklist.policyLabel, href: checklist.policyHref } : null;
+  const packetCard = (
+    <PacketCard
+      order={order}
+      record={record}
+      model={packet}
+      role={role}
+      actorId={actorId}
+      onApplied={onApplied}
+      onInboundFax={onInboundFax}
+      onOpen={onOpen}
+      insurer={withInsurer ? insurer : null}
+      onCheckNow={onCheckNow}
+    />
+  );
 
   return (
     <div className="flex flex-col gap-6">
-      <AiSummary order={order} panel={panel} checklist={checklist} role={role} actorId={actorId} onApplied={onApplied} onCheckNow={onCheckNow} />
-      {check.staleness && (
-        <RulesChangedBanner staleness={check.staleness} onRerun={() => check.recheck(PEOPLE_BY_ID[actorId]?.name ?? "System")} />
-      )}
-      {order.submissionBlocked && <p data-helper className="text-body text-fg-2">Submission blocked until records arrive.</p>}
-      <PortalChecklist order={order} record={record} />
-      <div className="grid grid-cols-1 gap-6 case:grid-cols-2">
-        <OrderBlock fields={fields} policy={checklist.policyLabel && checklist.policyHref ? { label: checklist.policyLabel, href: checklist.policyHref } : null} onOpen={onOpen} />
-        <DocumentsBlock rows={docs} onOpen={onOpen} />
-      </div>
+      {check.staleness && <RulesChangedBanner staleness={check.staleness} onRerun={() => check.recheck(PEOPLE_BY_ID[actorId]?.name ?? "System")} />}
+      {withInsurer && packetCard}
+      <AiSummary order={order} panel={panel} record={record} role={role} actorId={actorId} onApplied={onApplied} onOpen={onOpen} onInboundFax={onInboundFax} />
       <ChecklistCard model={checklist} onOpen={onOpen} />
-      {insurer && <InsurerBlock panel={insurer} onCheckNow={onCheckNow} />}
       <EvidenceCard lines={evidence} onOpen={onOpen} />
-      <Fold
-        title="Activity"
-        summary={panel.activity[0] ? `${panel.activity[0].actor} · ${panel.activity[0].to}` : String(panel.activity.length)}
-        defaultOpen={false}
-        review="Activity"
-      >
-        {panel.activity.map((entry) => (
-          <div
-            key={`${entry.at}-${entry.to}`}
-            className="flex flex-wrap items-baseline gap-x-4 gap-y-2 border-b border-line py-4 text-value last:border-b-0 last:pb-0 first:pt-0"
-          >
+      <OrderBlock fields={fields} policy={policy} onOpen={onOpen} />
+      {facts && <ClinicalFacts model={facts} onOpen={onOpen} />}
+      {!withInsurer && packetCard}
+      <DocumentsBlock rows={docs} onOpen={onOpen} />
+      <Fold title="Activity" summary={activity[0]?.to || activity[0]?.reason || "None"} defaultOpen={Boolean(order.pipelineActivity?.length)} review="Activity">
+        {activity.map((entry) => (
+          <div key={`${entry.at}-${entry.reason}`} className="flex flex-wrap items-baseline gap-x-4 gap-y-2 border-b border-line py-4 text-value last:border-b-0 last:pb-0 first:pt-0">
             <span className="text-caption text-fg-2">{fmtTableDate(new Date(entry.at))}</span>
             <span className="text-fg">{entry.actor}</span>
-            <span className="text-fg-2">
-              {entry.from} → {entry.to}
-            </span>
+            <span className="text-fg-2">{activityLine(entry)}</span>
+            {entry.reason && activityLine(entry) !== entry.reason && <span className="basis-full text-body text-fg-2">{entry.reason}</span>}
           </div>
         ))}
+      </Fold>
+      <Fold title="Notes" summary={panel.documentNotes.length ? String(panel.documentNotes.length) : "None"} defaultOpen={false} review="Notes">
+        {panel.documentNotes.length === 0 ? (
+          <div className="text-body text-fg-2">No notes on this packet.</div>
+        ) : (
+          panel.documentNotes.map((note) => (
+            <div key={note.id} className="flex items-start justify-between gap-4 border-b border-line py-3 last:border-b-0">
+              <div className="min-w-0">
+                <div className="text-body text-fg">{note.label}</div>
+                <div className="text-caption text-fg-2">{note.found}</div>
+              </div>
+              {note.quote && note.page ? (
+                <CitationChip page={note.page} excerpt={note.quote} onOpen={() => onOpen({ docId: note.docId ?? "packet", page: note.page ?? 1, quote: note.quote ?? "" })} />
+              ) : null}
+            </div>
+          ))
+        )}
       </Fold>
     </div>
   );
@@ -152,6 +173,9 @@ function Fold({
   children: ReactNode;
 }) {
   const [open, setOpen] = useState(defaultOpen);
+  useEffect(() => {
+    if (defaultOpen) setOpen(true);
+  }, [defaultOpen]);
   return (
     <section data-review={review} className="rounded-block border border-line-strong bg-panel px-6 py-5">
       <button type="button" className="flex w-full items-baseline justify-between gap-4 text-left" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
@@ -163,102 +187,97 @@ function Fold({
   );
 }
 
-function summaryStatus(checklist: ReturnType<typeof presentChecklist>): CriterionStatus | null {
-  const rows = checklist.criteria?.rows ?? [];
-  const open = rows.filter((row) => row.status !== "met" && row.status !== "waived");
-  if (open.length === 0) return null;
-  return open.slice().sort((a, b) => statusRank(a.status) - statusRank(b.status))[0]?.status ?? null;
+function actionCopy(order: Order): string {
+  return caseSummaryText(order);
 }
 
-function statusRank(status: CriterionStatus): number {
-  if (status === "not_met") return 0;
-  if (status === "unknown") return 1;
-  if (status === "needs_review") return 2;
-  return 3;
-}
-
-function issueChip(code: Order["otherIssues"][number]["code"]): string {
-  if (code === "CRITERIA_NOT_MET") return label(CRITERION_STATUS_LABEL, "not_met");
-  if (code === "MISSING_DOCUMENTS") return label(CRITERION_STATUS_LABEL, "unknown");
-  return reasonChip(code);
+function lead(text: string): string {
+  if (!text) return text;
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function AiSummary({
   order,
   panel,
-  checklist,
+  record,
   role,
   actorId,
   onApplied,
-  onCheckNow,
+  onOpen,
+  onInboundFax,
 }: {
   order: Order;
   panel: ReviewPanel;
-  checklist: ReturnType<typeof presentChecklist>;
+  record: CaseRecord;
   role: UserRole;
   actorId: string;
   onApplied: (result: AppliedCase) => void;
-  onCheckNow?: () => void;
+  onOpen: (cite: OpenPage) => void;
+  onInboundFax?: () => void;
 }) {
+  const [asked, setAsked] = useState<"scan" | "review" | null>(null);
   const submitted = toOrderStatus(order.status) === "SUBMITTED";
-  const buttons = submitted ? [] : caseButtons(order.reasonCode, role);
-  const headline = order.reasonCode ? explainReason(order.reasonCode, order.detail) : order.reason;
-  const next = order.reasonCode ? whatToDo(order.reasonCode, order.detail) : "No person needs to act. The pipeline is still working.";
-  const summary = composeAiSummary(headline, next);
-  const criterionStatus = summaryStatus(checklist);
-  const chip = criterionStatus ? null : order.reasonCode ? reasonChip(order.reasonCode) : null;
-  const deadlineLabel = panel.scan.deadline ?? "";
-  const pastDue = /^past due/i.test(deadlineLabel);
-  const fix = deadlineLabel.replace(/^(Past due · |Submit by |Fix by )/i, "");
-  const risk = panel.scan.risk === "at_risk" || panel.scan.risk === "slot_at_risk";
+  const buttons = (submitted ? [] : caseButtons(order.reasonCode, role)).filter((button) => button.id !== "uploaded" && button.id !== "open_packet");
+  const draft = order.reasonCode === "RETURN_TO_PROVIDER";
+  const summary = actionCopy(order);
+  const blockers = blockersFor(order, record);
+  const warning = slotWarning(order, panel.checks.receivedAt);
 
   return (
     <section className="rounded-block border border-accent-line bg-accent-bg px-6 py-5">
       <div className="flex flex-wrap items-center gap-2">
         <Sparkles size={16} className="text-accent-fg" aria-hidden="true" />
-        <span className="text-body font-medium text-accent-fg">AI summary</span>
-        {criterionStatus && <StatusMark status={criterionStatus} />}
-        {chip && <span className="inline-flex h-5 items-center rounded-md border border-accent-line px-2 text-caption font-medium text-accent-fg">{chip}</span>}
+        <span className="text-body font-medium text-accent-fg">{draft ? "Draft" : "Summary"}</span>
       </div>
       <div data-ai-summary className="mt-2 text-body text-fg">
         {summary}
       </div>
-      {order.otherIssues.length > 0 && (
-        <ul className="mt-4 flex flex-col gap-2">
-          {order.otherIssues.map((issue) => (
-            <li key={`${issue.code}-${issue.detail.document ?? issue.detail.line ?? ""}`} data-row className="flex items-start gap-2">
-              <Chip>{issueChip(issue.code)}</Chip>
-              <span className="text-body text-fg-2">{issue.detail.line ? String(issue.detail.line) : explainReason(issue.code, issue.detail)}</span>
-            </li>
+      {order.submissionBlocked && <p data-helper className="mt-3 text-body text-fg-2">Submission blocked until records arrive.</p>}
+      {blockers.length > 0 && (
+        <div className="mt-4">
+          <div className="text-caption text-fg-2">{draft ? "Send to" : "Blockers"}</div>
+          {blockers.map((item) => (
+            <BlockerRow key={item.id} item={item} draft={draft} onOpen={onOpen} />
           ))}
-        </ul>
+        </div>
       )}
-      {(order.scheduledAt || buttons.length > 0 || (submitted && onCheckNow)) && (
-        <div className="mt-4 flex flex-wrap items-center justify-between gap-4 border-t border-accent-line pt-4">
-          {order.scheduledAt ? (
-            <div className="text-caption text-fg-2">
-              Scan {scanStamp(order.scheduledAt)}
-              {fix && (
-                <>
-                  {pastDue ? " · Past due · " : " · Submit by "}
-                  <Tip content={SUBMIT_BY_HINT}>
-                    <span className={risk ? "text-warning" : undefined}>{fix}</span>
-                  </Tip>
-                </>
-              )}
-            </div>
-          ) : (
-            <span />
-          )}
-          {submitted && onCheckNow && (
-            <Button variant="secondary" onClick={onCheckNow}>
-              Check now
+      {warning && (
+        <div className="mt-4 border-t border-accent-line pt-4">
+          <div className="text-body text-warning">{warning}</div>
+          <div className="mt-3 flex flex-wrap gap-2">
+            <Button variant="secondary" disabled={asked !== null} onClick={() => setAsked("scan")}>
+              {asked === "scan" ? "Reschedule requested" : "Reschedule scan"}
             </Button>
-          )}
-          {buttons.length > 0 && <SummaryActions order={order} role={role} actorId={actorId} buttons={buttons} onApplied={onApplied} />}
+            <Button variant="secondary" disabled={asked !== null} onClick={() => setAsked("review")}>
+              {asked === "review" ? "Expedited review requested" : "Request expedited review"}
+            </Button>
+          </div>
+        </div>
+      )}
+      {buttons.length > 0 && (
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-4 border-t border-accent-line pt-4">
+          <SummaryActions order={order} role={role} actorId={actorId} buttons={buttons} onApplied={onApplied} onInboundFax={onInboundFax} />
         </div>
       )}
     </section>
+  );
+}
+
+function BlockerRow({ item, draft, onOpen }: { item: BlockerItem; draft: boolean; onOpen: (cite: OpenPage) => void }) {
+  const who = draft ? [item.phone, item.fax ? `fax ${item.fax}` : null].filter(Boolean).join(" · ") : [item.who, item.phone, item.fax ? `fax ${item.fax}` : null].filter(Boolean).join(" · ");
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-accent-line py-3 last:border-b-0">
+      <div className="min-w-0">
+        <div className="text-body text-fg">{lead(draft ? item.who : item.item)}</div>
+        {who && <div className="text-caption text-fg-2">{who}</div>}
+        {item.note && <div className="text-caption text-fg-2">{item.note}</div>}
+      </div>
+      {item.epic ? (
+        <SourceTag lastRun="on file" />
+      ) : item.cite ? (
+        <CitationChip docId={item.cite.docId} page={item.cite.page} label={item.cite.label} excerpt={item.cite.quote} onOpen={() => onOpen({ docId: item.cite!.docId, page: item.cite!.page, quote: item.cite!.quote })} />
+      ) : null}
+    </div>
   );
 }
 
@@ -302,12 +321,14 @@ function SummaryActions({
   actorId,
   buttons,
   onApplied,
+  onInboundFax,
 }: {
   order: Order;
   role: UserRole;
   actorId: string;
   buttons: CaseButton[];
   onApplied: (result: AppliedCase) => void;
+  onInboundFax?: () => void;
 }) {
   const [note, setNote] = useState("");
   const [portalReference, setPortalReference] = useState("");
@@ -318,6 +339,10 @@ function SummaryActions({
   const needsPortal = buttons.some((button) => button.action?.requires.includes("portalReference"));
 
   function run(button: CaseButton) {
+    if ((button.id === "documents_received" || button.id === "copy_received") && onInboundFax) {
+      onInboundFax();
+      return;
+    }
     const view = rendered.find((item) => item.id === button.id);
     if (view?.disabled) return;
     const action = button.action ?? defined.find((item) => item.id === button.id);
@@ -404,15 +429,20 @@ function OrderBlock({
   onOpen: (cite: OpenPage) => void;
 }) {
   return (
-    <Block title="Order">
+    <Block title="Request details">
       <div className="grid grid-cols-1 gap-x-6 fields:grid-cols-2">
         {fields.map((field, index) => (
           <div key={field.label} className={cn("min-w-0 border-t border-line py-4", index === 0 && "border-t-0", index === 1 && "fields:border-t-0")}>
             <div className="text-caption text-fg-2">{field.label}</div>
             {field.label === "Policy" && policy && !field.muted ? (
-              <Link to={policy.href} className="text-value text-accent-fg">
-                {policy.label}
-              </Link>
+              <div className="flex flex-wrap items-center gap-2">
+                <Link to={policy.href} className="text-value text-accent-fg">
+                  {policy.label}
+                </Link>
+                {field.cite && (
+                  <CitationChip docId={field.cite.docId} page={field.cite.page} label={field.cite.label} excerpt={field.cite.quote} onOpen={() => onOpen({ docId: field.cite!.docId, page: field.cite!.page, quote: field.cite!.quote })} />
+                )}
+              </div>
             ) : (
               <FieldValue field={field} onOpen={onOpen} />
             )}
@@ -430,7 +460,7 @@ function FieldValue({ field, onOpen }: { field: OrderField; onOpen: (cite: OpenP
     <>
       {field.handwritten && <span className="text-caption text-fg-3">Handwritten</span>}
       {field.unparsed && <span className="text-caption text-fg-3">Unparsed</span>}
-      {field.cite && <CitationChip page={field.cite.page} excerpt={field.cite.quote} onOpen={() => onOpen({ docId: field.cite!.docId, page: field.cite!.page, quote: field.cite!.quote })} />}
+      {field.cite && <CitationChip docId={field.cite.docId} page={field.cite.page} label={field.cite.label} excerpt={field.cite.quote} onOpen={() => onOpen({ docId: field.cite!.docId, page: field.cite!.page, quote: field.cite!.quote })} />}
       {field.origin === "epic" && <SourceTag lastRun={field.lastRun} />}
     </>
   );
@@ -443,8 +473,8 @@ function FieldValue({ field, onOpen }: { field: OrderField; onOpen: (cite: OpenP
   );
 }
 
-function PortalChecklist({ order, record }: { order: Order; record: CaseRecord }) {
-  const packet = portalPacketFor(order, record);
+function PortalChecklist({ order, record, nested = false }: { order: Order; record: CaseRecord; nested?: boolean }) {
+  const packet = order.channel === "portal" || order.reasonCode === "PORTAL_UPLOAD" ? portalPacketFor({ ...order, reasonCode: "PORTAL_UPLOAD" }, record) : null;
   const [copied, setCopied] = useState<string | null>(null);
   if (!packet) return null;
   async function copy(label: string, value: string) {
@@ -455,10 +485,12 @@ function PortalChecklist({ order, record }: { order: Order; record: CaseRecord }
       setCopied(null);
     }
   }
-  return (
-    <section className="rounded-block border border-line-strong bg-panel px-6 py-5">
-      <h2 className="text-block text-fg">Portal packet</h2>
-      <p data-helper className="mt-1 text-body text-fg-2">Paste these fields, then upload the packet in order.</p>
+  const body = (
+    <>
+      {nested ? null : <h2 className="text-block text-fg">Portal packet</h2>}
+      <p data-helper className="mt-1 text-body text-fg-2">
+        {order.reasonCode === "PORTAL_UPLOAD" && !order.submissionBlocked ? "Paste these fields, then upload the packet in order." : "Copy these fields for the portal."}
+      </p>
       <div className="mt-4 flex flex-col gap-2">
         {packet.fields.map((field) => (
           <div key={field.label} className="flex items-center justify-between gap-4">
@@ -476,17 +508,86 @@ function PortalChecklist({ order, record }: { order: Order; record: CaseRecord }
           </div>
         ))}
       </div>
-    </section>
+    </>
   );
+  if (nested) return <div className="mt-4">{body}</div>;
+  return <section className="rounded-block border border-line-strong bg-panel px-6 py-5">{body}</section>;
 }
 
 function ExamValue({ value }: { value: string }) {
   const parts = value.split(" · ");
-  if (parts.length !== 2) return <>{value}</>;
+  const cpt = parts[parts.length - 1] ?? "";
+  if (!/^\d{5}$/.test(cpt) || parts.length < 2) return <>{value}</>;
   return (
     <>
-      {parts[0]} · <span className="font-mono">{parts[1]}</span>
+      {parts.slice(0, -1).join(" · ")} · <span className="font-mono">{cpt}</span>
     </>
+  );
+}
+
+function PacketCard({
+  order,
+  record,
+  model,
+  role,
+  actorId,
+  onApplied,
+  onInboundFax,
+  onOpen,
+  insurer,
+  onCheckNow,
+}: {
+  order: Order;
+  record: CaseRecord;
+  model: PacketModel;
+  role: UserRole;
+  actorId: string;
+  onApplied: (result: AppliedCase) => void;
+  onInboundFax?: () => void;
+  onOpen: (cite: OpenPage) => void;
+  insurer?: InsurerPanelModel | null;
+  onCheckNow?: () => void;
+}) {
+  const portalButtons = caseButtons(order.reasonCode, role).filter((button) => button.id === "uploaded" || button.id === "open_packet");
+  return (
+    <section className="rounded-block border border-line-strong bg-panel px-6 py-5">
+      <h2 className="text-block text-fg">Packet & submission</h2>
+      {model.attachments.length > 0 && (
+        <div className="mt-4">
+          {model.attachments.map((item) => (
+            <div key={item.label} className="flex items-center justify-between gap-4 border-b border-line py-3 last:border-b-0">
+              <span className="text-body text-fg">{item.label}</span>
+              <span className="flex items-center gap-2">
+                {item.met ? <Check size={16} className="text-good" aria-label="Present" /> : <span className="text-body text-fg-2">Missing</span>}
+                {item.cite && (
+                  <CitationChip docId={item.cite.docId} page={item.cite.page} label={item.cite.label} excerpt={item.cite.quote} onOpen={() => onOpen({ docId: item.cite!.docId, page: item.cite!.page, quote: item.cite!.quote })} />
+                )}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+      <div className="mt-4 text-body text-fg">{model.pages}</div>
+      <div className="mt-2 flex flex-wrap items-center gap-2 text-body text-fg">
+        <span>{model.channel}</span>
+        {model.channelCite && (
+          <CitationChip
+            docId={model.channelCite.docId}
+            page={model.channelCite.page}
+            label={model.channelCite.label}
+            excerpt={model.channelCite.quote}
+            onOpen={() => onOpen({ docId: model.channelCite!.docId, page: model.channelCite!.page, quote: model.channelCite!.quote })}
+          />
+        )}
+      </div>
+      <PortalChecklist order={order} record={record} nested />
+      {portalButtons.length > 0 && (
+        <div className="mt-4">
+          <SummaryActions order={order} role={role} actorId={actorId} buttons={portalButtons} onApplied={onApplied} onInboundFax={onInboundFax} />
+        </div>
+      )}
+      {insurer && <InsurerBlock panel={insurer} onCheckNow={onCheckNow} embedded />}
+    </section>
   );
 }
 
@@ -500,7 +601,7 @@ function DocumentsBlock({ rows, onOpen }: { rows: DocRow[]; onOpen: (cite: OpenP
             <div className="text-value text-fg">{row.name}</div>
             <div className="text-body text-fg-2">{row.description}</div>
           </div>
-          <CitationChip page={row.page} excerpt={row.quote} onOpen={() => onOpen({ docId: row.docId, page: row.page, quote: row.quote })} />
+          <CitationChip docId={row.docId} page={row.page} excerpt={row.quote} onOpen={() => onOpen({ docId: row.docId, page: row.page, quote: row.quote })} />
         </div>
       ))}
     </Block>

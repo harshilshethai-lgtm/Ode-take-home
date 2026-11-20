@@ -34,6 +34,7 @@ function panel(patch: Partial<InsurerPanelModel>): InsurerPanelModel {
     latestRaw: "approved",
     lastCheckedLabel: "Mon 11/9 · 4:00 PM",
     nextCheckLabel: null,
+    nextCheckAt: null,
     approval: { number: "FH-100", cpt: "72148", units: "1", validFrom: "2026-11-16", validTo: "2027-02-14", matched: true },
     sent: [{ label: "Office note", pages: "1, 2" }],
     packetUrl: "packet://case/as-sent",

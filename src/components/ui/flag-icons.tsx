@@ -16,6 +16,7 @@ import { Tip } from "./tooltip";
 
 const FLAG_ICON: Record<FlagId, LucideIcon> = {
   safety: ShieldAlert,
+  slot_unreachable: CalendarX,
   slot_at_risk: CalendarX,
   scan_at_risk: AlarmClock,
   urgent: Siren,

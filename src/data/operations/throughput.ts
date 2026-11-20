@@ -1,4 +1,5 @@
 import { HOSPITAL } from "@/data/operations/queue";
+import { configFor } from "@/domain/insurer/config";
 import { addBusinessHours } from "@/domain/operations/time";
 import { DEMO_NOW, demoDateKey, parseDemoInstant } from "@/lib/demoClock";
 
@@ -188,10 +189,14 @@ export const MATCHED_BASELINE: Record<string, number> = Object.fromEntries(
   PLANS.map((plan) => [plan.insurer, plan.matchedBaseline]),
 );
 
-/** Median hours from order to an insurer decision, for the current week. */
+/** Median hours from submission to a decision, from the insurer table. */
 export function medianDecisionHours(insurer: string | null): number {
-  const plan = PLANS.find((item) => item.insurer === insurer);
-  return plan?.current.decisionHours ?? 48;
+  if (!insurer) return 48;
+  try {
+    return configFor(insurer).medianDecisionHours;
+  } catch {
+    return 48;
+  }
 }
 
 function lerp(a: number, b: number, t: number): number {

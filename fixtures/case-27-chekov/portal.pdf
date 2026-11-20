@@ -1,0 +1,84 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >> 
+endobj
+2 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold >> 
+endobj
+3 0 obj
+<< /Length 575 >>
+stream
+BT
+/F1 9 Tf
+36 758 Td
+(ANDORIAN LIFE PORTAL | 11/10/2026 11:40 AM) Tj
+ET
+BT
+/F2 14 Tf
+48 730 Td
+(Upload failed: file > 10MB) Tj
+ET
+BT
+/F2 11 Tf
+48 708 Td
+(Patient: Pavel Chekov) Tj
+ET
+BT
+/F2 11 Tf
+48 692 Td
+(DOB: 09/19/1994) Tj
+ET
+BT
+/F2 11 Tf
+48 676 Td
+(MRN: HH-0017318) Tj
+ET
+BT
+/F2 11 Tf
+48 660 Td
+(Study: MRI shoulder right 73221) Tj
+ET
+BT
+/F2 11 Tf
+48 644 Td
+() Tj
+ET
+BT
+/F2 11 Tf
+48 628 Td
+(The packet was 14MB. The portal stopped the upload.) Tj
+ET
+BT
+/F2 11 Tf
+48 612 Td
+(Compress the packet under 10MB and resubmit.) Tj
+ET
+BT
+/F1 8 Tf
+48 48 Td
+(Portal receipt) Tj
+ET
+endstream 
+endobj
+4 0 obj
+<< /Type /Page /Parent 5 /MediaBox [0 0 612 792] /Contents 3 0 R /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> >> 
+endobj
+5 0 obj
+<< /Type /Pages /Count 1 /Kids [4 0 R] >> 
+endobj
+6 0 obj
+<< /Type /Catalog /Pages 5 0 R >> 
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000078 00000 n 
+0000000152 00000 n 
+0000000779 00000 n 
+0000000912 00000 n 
+0000000970 00000 n 
+trailer << /Size 7 /Root 6 0 R >>
+startxref
+1020
+%%EOF

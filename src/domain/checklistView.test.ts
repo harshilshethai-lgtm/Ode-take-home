@@ -1,9 +1,11 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { getDocument } from "pdfjs-dist/legacy/build/pdf.mjs";
 import { SEED_ORDERS } from "@/data/orders";
 import { buildCaseRecord, sentences, words } from "@/domain/caseRecord";
 import { getReviewPanel } from "@/domain/review/panel";
+import { pdfPageFor } from "@/domain/documents";
+import { fixturePath } from "@/lib/fixtureFiles";
 import { explainReason, whatToDo } from "@/domain/priorAuth/reasons";
 import {
   composeAiSummary,
@@ -42,10 +44,11 @@ describe("checklist", () => {
     expect(view.criteria?.rows.filter((row) => row.status === "unknown")).toHaveLength(1);
     const xray = view.criteria?.rows.find((row) => row.id === "prior_xray");
     expect(xray?.status).toBe("not_met");
-    expect(xray?.tag).toBe("Fixable with records");
+    expect(xray?.tag).toBe("Needs new order");
     expect(xray?.fact).toBe("Not found in the packet");
     expect(xray?.evidence.some((line) => line.cite?.quote)).toBe(false);
-    expect(view.criteria?.rows.find((row) => row.id === "symptom_duration")?.tag).toBe("Clinical");
+    expect(view.criteria?.rows.find((row) => row.id === "symptom_duration")?.tag).toBe("Needs time");
+    expect(view.criteria?.rows.find((row) => row.id === "conservative_care")?.tag).toBe("Needs time");
     expect(view.dataChecks?.count).toBe("5/5 passed");
     expect(view.dataChecks?.rows.every((row) => row.id.startsWith("CV-") || row.id.startsWith("CO-"))).toBe(true);
   });
@@ -61,6 +64,17 @@ describe("checklist", () => {
     expect(view.policyLabel).toBe("RAD-114 · Effective 01/01/2026 (v3)");
   });
 
+  it("Scott's second fax meets conservative care and the prior MRI", () => {
+    const scott = { ...order("case-2-scott"), faxAttached: true };
+    const view = presentChecklist(scott, getReviewPanel(scott.id, "coordinator", scott));
+    const care = view.criteria?.rows.find((row) => row.id === "conservative_care");
+    const mri = view.criteria?.rows.find((row) => row.id === "no_recent_mri");
+    expect(care?.status).toBe("met");
+    expect(care?.fact).toBe("39 days of documented PT");
+    expect(mri?.status).toBe("met");
+    expect(mri?.fact).toBe("None on record");
+  });
+
   it("drops a repeated next step from the summary", () => {
     const sulu = order("case-3-sulu");
     const text = composeAiSummary(explainReason(sulu.reasonCode!, sulu.detail), whatToDo(sulu.reasonCode!, sulu.detail));
@@ -73,13 +87,8 @@ describe("checklist", () => {
 
 const norm = (value: string) => value.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
 
-function packetPath(file: string): string | null {
-  const folder = readdirSync("fixtures").find((name) => name.startsWith("case-") && name.endsWith(`-${file}`));
-  return folder ? `fixtures/${folder}/input.pdf` : null;
-}
-
 async function pageText(file: string, page: number): Promise<string | null> {
-  const path = file === "policy" ? "fixtures/policies/insurer-policy-excerpts.pdf" : packetPath(file);
+  const path = fixturePath(file);
   if (!path) return null;
   const data = new Uint8Array(readFileSync(path));
   const doc = await getDocument({ data, disableWorker: true } as Parameters<typeof getDocument>[0]).promise;
@@ -90,13 +99,18 @@ async function pageText(file: string, page: number): Promise<string | null> {
 }
 
 function transcript(file: string, page: number): string {
-  const matches = SEED_ORDERS.filter((item) => buildCaseRecord(item).documents[0]?.file === file);
   const quotes: string[] = [];
-  for (const item of matches) {
+  const take = (record: ReturnType<typeof buildCaseRecord>, docId: string, docPage: number, quote: string) => {
+    const doc = record.documents.find((item) => item.id === docId) ?? record.documents[0];
+    if (!doc || doc.file !== file) return;
+    if ((pdfPageFor(doc, docPage) ?? docPage) !== page) return;
+    quotes.push(quote);
+  };
+  for (const item of SEED_ORDERS) {
     const record = buildCaseRecord(item);
-    for (const row of record.extracted) if (row.cite.page === page) quotes.push(row.cite.quote);
-    for (const row of record.criteria) for (const cite of row.cites) if (cite.page === page) quotes.push(cite.quote);
-    for (const element of record.elements) if (element.cite?.page === page && element.cite.quote) quotes.push(element.cite.quote);
+    for (const row of record.extracted) take(record, row.cite.docId, row.cite.page, row.cite.quote);
+    for (const row of record.criteria) for (const cite of row.cites) take(record, cite.docId, cite.page, cite.quote);
+    for (const element of record.elements) if (element.cite?.quote) take(record, element.cite.docId, element.cite.page, element.cite.quote);
   }
   return quotes.join(" ");
 }

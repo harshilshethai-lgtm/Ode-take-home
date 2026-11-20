@@ -2,13 +2,24 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import { ChevronLeft, ChevronRight, Minus, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tip } from "@/components/ui/tooltip";
-import type { CaseDocument, ExtractRow } from "@/domain/caseRecord";
+import type { ExtractRow } from "@/domain/caseRecord";
+import {
+  SOURCE_GROUPS,
+  documentSlots,
+  pageCountLabel,
+  pdfPageFor,
+  sourceGroup,
+  type CaseDocument,
+  type SourceGroup,
+} from "@/domain/documents";
+import { parseDemoInstant } from "@/lib/demoClock";
+import { fmtTableDate } from "@/lib/format";
 import { sourceDocumentUrl } from "@/lib/sourceDocs";
 import { cn } from "@/lib/cn";
 import {
   boxForQuote,
-  declaredPages,
   missingCopy,
   pageLabel,
   pageSlots,
@@ -16,9 +27,9 @@ import {
   sectionText,
   slotForTarget,
   stepZoom,
-  viewerSections,
   writeZoom,
   type NormBox,
+  type PageSlot,
   type PolicyAttachment,
   type ViewerSection,
   type ZoomChoice,
@@ -53,13 +64,13 @@ const isTyping = (target: EventTarget | null) =>
   target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
 
 /** Right pane: one PDF at a time, page controls, and a box around the open citation. */
-export function DocumentPane({ documents, extracted, policy, urls, target, onTarget }: Props) {
+export function DocumentPane({ documents, policy, urls, target, onTarget }: Props) {
   const packet = documents[0];
   const showingPolicy = target?.docId === "policy" && !!policy;
   const active = showingPolicy ? null : (documents.find((doc) => doc.id === target?.docId) ?? packet);
   const policyUrl = policy ? (sourceDocumentUrl(policy.source)?.split("#")[0] ?? null) : null;
   const url = showingPolicy ? policyUrl : active ? urls[active.file] : null;
-  const sections = packet ? viewerSections(packet.file, packet.title, extracted) : [];
+  const sections = active ? sectionsOf(active) : [];
   const [pdfCount, setPdfCount] = useState(0);
   const [choice, setChoice] = useState<ZoomChoice>(readZoom);
   const fitRef = useRef({ width: 1, page: 1 });
@@ -77,16 +88,12 @@ export function DocumentPane({ documents, extracted, policy, urls, target, onTar
   }
 
   const file = showingPolicy ? undefined : active?.file;
-  const title = showingPolicy ? "Policy" : active?.title;
-  const slots = pageSlots(file, showingPolicy ? undefined : title, pdfCount);
-  const declared = declaredPages(file, pdfCount);
+  const slots = showingPolicy || !active ? pageSlots(undefined, undefined, pdfCount) : documentSlots(active, pdfCount);
+  const declared = active?.declaredPageTotal ?? slots.length;
   const index = slotForTarget(slots, showingPolicy ? { page: target?.page } : target);
-  let slot = slots[index] ?? slots[0];
-  // Until the PDF reports its length, still show the page a citation asked for.
-  if (!showingPolicy && target?.page && pdfCount === 0 && slot?.pdfPage !== target.page && target.faxPage == null) {
-    slot = { faxPage: title === "Fax" ? target.page : null, pdfPage: target.page };
-  }
+  const slot = slots[index] ?? slots[0];
   const quote = slot?.missing ? undefined : target?.quote;
+  const original = documents.find((doc) => doc.originalFile)?.originalFile;
 
   const choose = (next: ZoomChoice) => setChoice(next);
   const zoomBy = (direction: 1 | -1) => {
@@ -103,15 +110,15 @@ export function DocumentPane({ documents, extracted, policy, urls, target, onTar
     if (!active) return;
     onTarget({
       docId: active.id,
-      page: next.pdfPage ?? 0,
+      page: next.docPage ?? next.pdfPage ?? 0,
       ...(next.faxPage != null ? { faxPage: next.faxPage } : {}),
     });
   };
   const openSection = (section: ViewerSection) => {
-    if (!packet) return;
+    if (!active) return;
     onTarget({
-      docId: packet.id,
-      page: section.pdfPage ?? 0,
+      docId: active.id,
+      page: section.start,
       ...(section.faxPage != null ? { faxPage: section.faxPage } : {}),
     });
   };
@@ -120,12 +127,13 @@ export function DocumentPane({ documents, extracted, policy, urls, target, onTar
     onTarget({ docId: "policy", page: policy.page });
   };
 
-  const currentPage = slot?.faxPage ?? slot?.pdfPage ?? null;
+  const currentPage = slot?.docPage ?? slot?.faxPage ?? slot?.pdfPage ?? null;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-sidebar">
       <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-line bg-panel px-2 py-2">
-        <span className="shrink-0 text-body text-fg">{packet.title}</span>
+        <span className="shrink-0 text-body text-fg">{showingPolicy ? "Policy" : active?.title}</span>
+        <Attachments documents={documents} policy={policy} urls={urls} original={original} activeId={showingPolicy ? "policy" : active?.id} onOpen={onTarget} onPolicy={openPolicy} />
         {sections.map((section) => {
           const selected = !showingPolicy && currentPage != null && currentPage >= section.start && currentPage <= section.end;
           return (
@@ -142,27 +150,13 @@ export function DocumentPane({ documents, extracted, policy, urls, target, onTar
             </span>
           );
         })}
-        {policy && (
-          <span className="flex shrink-0 items-center gap-2">
-            <span className="text-caption text-fg-3" aria-hidden="true">·</span>
-            <button
-              type="button"
-              className={cn("inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1", showingPolicy && "bg-hover")}
-              aria-current={showingPolicy ? "page" : undefined}
-              onClick={openPolicy}
-            >
-              <span className="rounded-md bg-chip px-1 text-caption text-chip-fg">Policy</span>
-              <span className="text-caption text-fg">{policy.title}</span>
-            </button>
-          </span>
-        )}
       </div>
       <ViewerBody
         url={url}
         file={file}
         page={slot?.pdfPage ?? null}
         quote={quote}
-        label={slot ? pageLabel(slot, declared, pdfCount) : ""}
+        label={slot ? slotLabel(slot, active, declared, pdfCount, showingPolicy) : ""}
         missing={slot ? missingCopy(slot) : null}
         canPrev={index > 0}
         canNext={index < slots.length - 1}
@@ -175,6 +169,104 @@ export function DocumentPane({ documents, extracted, policy, urls, target, onTar
         onCount={setPdfCount}
       />
     </div>
+  );
+}
+
+function sectionsOf(doc: CaseDocument): ViewerSection[] {
+  return doc.sections.map((section) => {
+    const [start, end] = section.pageRange;
+    const missing = doc.missingPages?.some((page) => page >= start && page <= end) ?? false;
+    return {
+      id: `${doc.id}-${section.label}`,
+      label: section.label,
+      start,
+      end,
+      pdfPage: missing ? null : pdfPageFor(doc, start),
+      faxPage: doc.sourceKind === "inbound_fax" ? start : null,
+      ...(missing ? { missing: true } : {}),
+    };
+  });
+}
+
+function slotLabel(slot: PageSlot, doc: CaseDocument | null, declared: number, pdfCount: number, policy: boolean): string {
+  if (policy || !doc || slot.docPage == null) return pageLabel(slot, declared, pdfCount);
+  if (slot.faxPage != null && slot.pdfPage != null && doc.declaredPageTotal) return `PDF p.${slot.pdfPage} · fax p.${slot.faxPage} of ${doc.declaredPageTotal}`;
+  if (slot.faxPage != null && slot.missing) return `fax p.${slot.faxPage} of ${doc.declaredPageTotal ?? declared}`;
+  return `${slot.docPage} of ${doc.pages}`;
+}
+
+function Attachments({
+  documents,
+  policy,
+  urls,
+  original,
+  activeId,
+  onOpen,
+  onPolicy,
+}: {
+  documents: CaseDocument[];
+  policy: PolicyAttachment | null;
+  urls: Record<string, string>;
+  original?: string;
+  activeId?: string;
+  onOpen: (cite: OpenCite) => void;
+  onPolicy: () => void;
+}) {
+  const groups = new Map<SourceGroup, CaseDocument[]>();
+  for (const doc of documents) {
+    const key = sourceGroup(doc.sourceKind);
+    groups.set(key, [...(groups.get(key) ?? []), doc]);
+  }
+  return (
+    <Popover>
+      <PopoverTrigger asChild>
+        <button type="button" className="inline-flex h-7 items-center rounded-md px-2 text-caption text-fg-2 hover:bg-hover hover:text-fg">
+          Attachments
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-96 p-2">
+        {SOURCE_GROUPS.map((group) => {
+          const docs = group === "Policy" ? [] : (groups.get(group) ?? []);
+          if (docs.length === 0 && !(group === "Policy" && policy)) return null;
+          return (
+            <div key={group} className="mb-2 last:mb-0">
+              <div className="px-2 py-1 text-caption text-fg-3">{group}</div>
+              {docs.map((doc) => (
+                <div key={doc.id} className={cn("rounded-md px-2 py-1", activeId === doc.id && "bg-hover")}>
+                  <button type="button" className="block w-full text-left" onClick={() => onOpen({ docId: doc.id, page: doc.initialPage })}>
+                    <span className="block text-body text-fg">{doc.title}</span>
+                    <span className="block text-caption text-fg-2">
+                      {doc.sender} · {fmtTableDate(parseDemoInstant(doc.receivedAt))} · {pageCountLabel(doc)}
+                    </span>
+                  </button>
+                  {sectionsOf(doc).map((section) => (
+                    <button
+                      key={section.id}
+                      type="button"
+                      className="mt-1 block text-left text-caption text-fg-3 hover:text-fg"
+                      onClick={() => onOpen({ docId: doc.id, page: section.start, ...(section.faxPage != null ? { faxPage: section.faxPage } : {}) })}
+                    >
+                      {sectionText(section)}
+                    </button>
+                  ))}
+                </div>
+              ))}
+              {group === "Policy" && policy && (
+                <button type="button" className="block w-full rounded-md px-2 py-1 text-left hover:bg-hover" onClick={onPolicy}>
+                  <span className="block text-body text-fg">{policy.title}</span>
+                  <span className="block text-caption text-fg-2">Policy · {policy.page === 1 ? "1 page" : `page ${policy.page}`}</span>
+                </button>
+              )}
+            </div>
+          );
+        })}
+        {original && urls[original] && (
+          <a href={urls[original]} className="mt-1 block px-2 py-1 text-caption text-accent-fg" download>
+            Original file
+          </a>
+        )}
+      </PopoverContent>
+    </Popover>
   );
 }
 

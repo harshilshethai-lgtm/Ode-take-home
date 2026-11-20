@@ -4,6 +4,7 @@ import { ChevronRight } from "lucide-react";
 import { Sparkline } from "@/components/operations/sparkline";
 import { ConceptInfo, InfoButton, MetricInfo } from "@/components/impact/metric-info";
 import { Segmented } from "@/components/impact/segmented";
+import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/chip";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { PageTitle } from "@/components/ui/page-title";
@@ -44,7 +45,7 @@ const PERCENT = { unit: "percent" as const };
 
 export default function Operations() {
   const navigate = useNavigate();
-  const { orders } = useOrders();
+  const { orders, startInboundFax } = useOrders();
   const [hospital, setHospital] = useState<string | null>(null);
   const [insurer, setInsurer] = useState<string | null>(null);
   const [period, setPeriod] = useState<Period>("week");
@@ -119,6 +120,15 @@ export default function Operations() {
             wide
           />
           <Segmented label="Period" value={period} options={PERIODS} onChange={setPeriod} />
+          <Button
+            variant="secondary"
+            onClick={() => {
+              startInboundFax("case-2-scott");
+              navigate("/case/case-2-scott");
+            }}
+          >
+            Simulate inbound fax
+          </Button>
           <span className="text-caption text-fg-3">{model.updated}</span>
           <Link to="/impact" className="inline-flex h-7 items-center text-body text-accent-fg">
             Trends and value → Impact

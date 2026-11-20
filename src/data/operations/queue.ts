@@ -82,6 +82,17 @@ export interface OwnerDef {
   definition: string;
 }
 
+/**
+ * How long a case may sit with this owner. The worklist turns "In queue" red past the target.
+ * Settings → Operations shows the coordinator and nurse numbers.
+ */
+export const QUEUE_TARGET_HOURS: Record<QueueOwner, number> = {
+  ai: 0.25,
+  coordinator: 4,
+  nurse: 8,
+  insurer: 48,
+};
+
 export const OWNERS: OwnerDef[] = [
   {
     id: "ai",

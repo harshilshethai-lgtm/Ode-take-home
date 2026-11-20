@@ -237,6 +237,28 @@ const BRIEFS: Record<string, OutreachBrief> = {
   },
 };
 
+const NAME_SKIP = new Set(["md", "do", "np", "pa", "dr", "the"]);
+
+function nameTokens(value: string): string[] {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z\s-]/g, " ")
+    .split(/[\s,]+/)
+    .filter((part) => part.length > 2 && !NAME_SKIP.has(part));
+}
+
+/** Phone we already have for this ordering provider, from a chase brief. */
+export function phoneForProvider(name: string | null): string | null {
+  if (!name) return null;
+  const want = nameTokens(name);
+  if (want.length === 0) return null;
+  for (const brief of Object.values(BRIEFS)) {
+    const have = nameTokens(brief.partyName);
+    if (want.some((token) => have.includes(token))) return brief.fax;
+  }
+  return null;
+}
+
 export function outreachFor(order: Pick<Order, "id" | "status">): OutreachBrief | null {
   if (!OPEN.has(order.status)) return null;
   return BRIEFS[order.id] ?? null;
