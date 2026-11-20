@@ -1,7 +1,100 @@
 @import "tailwindcss";
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+/*
+ * Design tokens. The ONLY place raw color values may appear (see scripts/design-lint.ts).
+ * Rules: .cursor/rules/design.mdc
+ */
+
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", sans-serif;
+  --font-sans: "Inter Variable", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, "SF Mono", Menlo, monospace;
+
+  /*
+   * Type scale: five named steps. The default Tailwind sizes (text-sm, text-xl ...) are NOT removed so screens
+   * not yet migrated keep rendering; scripts/design-lint.ts forbids them in migrated code.
+   */
+  --text-caption: 12px;
+  --text-caption--line-height: 16px;
+  --text-body: 13px;
+  --text-body--line-height: 20px;
+  --text-emph: 14px;
+  --text-emph--line-height: 20px;
+  --text-emph--font-weight: 500;
+  --text-section: 16px;
+  --text-section--line-height: 24px;
+  --text-section--font-weight: 600;
+  --text-title: 20px;
+  --text-title--line-height: 28px;
+  --text-title--font-weight: 600;
+
+  /* Weights 400/500/600, radius md 6px (controls) and lg 8px (cards), and the one shadow-sm match Tailwind's
+     defaults; the lint forbids everything else. */
+  --radius-md: 6px;
+  --radius-lg: 8px;
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.06), 0 1px 3px 0 rgb(0 0 0 / 0.06);
+
+  --container-page: 1200px;
+  --container-wide: 1440px;
+
+  --default-transition-duration: 140ms;
+  --default-transition-timing-function: ease-out;
+}
+
+:root {
+  --app: #fbfbfc;
+  --panel: #ffffff;
+  --sidebar: var(--color-zinc-50);
+  --line: color-mix(in oklab, var(--color-zinc-200) 60%, transparent);
+  --fg: var(--color-zinc-900);
+  --fg-2: var(--color-zinc-500);
+  --fg-3: var(--color-zinc-400);
+  --label: var(--color-zinc-700);
+  --hover: var(--color-zinc-50);
+  --chip: var(--color-zinc-100);
+  --chip-fg: var(--color-zinc-600);
+  --accent: var(--color-indigo-600);
+  --accent-fg: var(--color-indigo-600);
+  --on-accent: #ffffff;
+  --scrim: rgb(0 0 0 / 0.2);
+}
+
+.dark {
+  --app: var(--color-zinc-950);
+  --panel: var(--color-zinc-900);
+  --sidebar: var(--color-zinc-900);
+  --line: color-mix(in oklab, var(--color-zinc-700) 60%, transparent);
+  --fg: var(--color-zinc-100);
+  --fg-2: var(--color-zinc-400);
+  --fg-3: var(--color-zinc-500);
+  --label: var(--color-zinc-300);
+  --hover: color-mix(in oklab, var(--color-zinc-800) 60%, transparent);
+  --chip: var(--color-zinc-800);
+  --chip-fg: var(--color-zinc-300);
+  --accent: var(--color-indigo-600);
+  --accent-fg: var(--color-indigo-400);
+  --scrim: rgb(0 0 0 / 0.5);
+}
+
+@theme inline {
+  --color-app: var(--app);
+  --color-panel: var(--panel);
+  --color-sidebar: var(--sidebar);
+  --color-line: var(--line);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-label: var(--label);
+  --color-hover: var(--hover);
+  --color-chip: var(--chip);
+  --color-chip-fg: var(--chip-fg);
+  --color-accent: var(--accent);
+  --color-accent-fg: var(--accent-fg);
+  --color-on-accent: var(--on-accent);
+  --color-scrim: var(--scrim);
 }
 
 html,
@@ -10,10 +103,87 @@ body,
   height: 100%;
 }
 
-body {
-  @apply bg-slate-50 text-slate-900 antialiased;
+html {
+  color-scheme: light;
+}
+html.dark {
+  color-scheme: dark;
 }
 
-.tabular {
+body {
+  background: var(--app);
+  color: var(--fg);
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 20px;
+  font-feature-settings: "cv11", "ss01";
   font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* In @layer base so a utility such as outline-none can still override it on inputs that draw their own focus. */
+@layer base {
+  :focus-visible {
+    outline: 2px solid var(--accent-fg);
+    outline-offset: 1px;
+  }
+
+  button,
+  [role="button"],
+  [role="tab"] {
+    cursor: default;
+  }
+
+  ::selection {
+    background: color-mix(in oklab, var(--accent) 25%, transparent);
+  }
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Two-column property list: label column then value column. */
+@utility grid-cols-props {
+  grid-template-columns: 7rem 1fr;
+}
+@utility grid-cols-settings {
+  grid-template-columns: 12rem 1fr;
+}
+@utility grid-cols-rule {
+  grid-template-columns: 2rem 12rem 10rem;
+}
+
+/* Icons: Lucide only, stroke 1.5 everywhere. */
+svg.lucide {
+  stroke-width: 1.5;
+}
+
+@utility size-dot {
+  width: 6px;
+  height: 6px;
+}
+
+@utility animate-collapsible {
+  animation: collapsible-down 140ms ease-out;
+}
+@keyframes collapsible-down {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+/* cmdk (command palette) states. */
+[cmdk-group-heading] {
+  padding: 4px 8px;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--fg-2);
+}
+[cmdk-item][data-selected="true"] {
+  background: var(--hover);
+  color: var(--fg);
 }

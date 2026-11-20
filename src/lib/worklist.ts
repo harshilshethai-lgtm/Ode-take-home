@@ -4,7 +4,7 @@ import { DEMO_NOW } from "@/data/orders";
 import { deriveFlags, type Flag } from "@/domain/flags";
 import { ownerRoleFor, STATUSES, isClosed, type OwnerRole } from "@/domain/statuses";
 import { computeTimeRisk, type TimeRisk } from "@/domain/timeRisk";
-import type { Order } from "@/domain/types";
+import type { Order, Person } from "@/domain/types";
 import { minutesSince } from "./format";
 
 export interface Row {
@@ -48,22 +48,30 @@ export function toRow(order: Order, now: Date = DEMO_NOW): Row {
   };
 }
 
-export type ViewId = "open" | "coordinator" | "nurse" | "automated" | "closed";
+/** Saved views (tabs). Each one is a filter over rows; counts come from the same predicate. */
+export type ViewId = "mine" | "unassigned" | "slot_at_risk" | "nurse" | "automated" | "closed";
 
 export const VIEWS: { id: ViewId; label: string; hint: string }[] = [
-  { id: "open", label: "All open", hint: "Every order still in flight" },
-  { id: "coordinator", label: "Coordinator queue", hint: "Paperwork that needs chasing" },
-  { id: "nurse", label: "Nurse queue", hint: "Clinical gaps, rule gaps and denials" },
-  { id: "automated", label: "Automated", hint: "The pipeline has it; no one needs to act" },
+  { id: "mine", label: "Needs me", hint: "Yours, plus unclaimed work for your role" },
+  { id: "unassigned", label: "Unassigned", hint: "A person has to act and nobody has claimed it" },
+  { id: "slot_at_risk", label: "Slot at risk", hint: "The insurer can't answer before the scan" },
+  { id: "nurse", label: "Nurse", hint: "Clinical gaps, rule gaps and denials" },
+  { id: "automated", label: "Automated", hint: "The pipeline has it" },
   { id: "closed", label: "Closed", hint: "Approved, not required, cancelled" },
 ];
 
-export function inView(row: Row, view: ViewId): boolean {
+export function inView(row: Row, view: ViewId, me: { id: string; role: Person["role"] }): boolean {
   switch (view) {
-    case "open":
-      return !row.closed;
-    case "coordinator":
-      return !row.closed && row.ownerRole === "coordinator";
+    case "mine": {
+      if (!needsPerson(row)) return false;
+      if (row.order.assigneeId === me.id) return true;
+      const myOwnerRoles: OwnerRole[] = me.role === "coordinator" ? ["coordinator"] : ["nurse", "rules_admin"];
+      return row.order.assigneeId === null && myOwnerRoles.includes(row.ownerRole);
+    }
+    case "unassigned":
+      return needsAssignee(row);
+    case "slot_at_risk":
+      return !row.closed && row.risk === "slot_at_risk";
     case "nurse":
       return !row.closed && (row.ownerRole === "nurse" || row.ownerRole === "rules_admin");
     case "automated":
@@ -83,13 +91,6 @@ export function needsPerson(row: Row): boolean {
 }
 
 export type QuickFilter = "needs_person" | "unassigned" | "slot_at_risk" | "no_touch";
-
-export const QUICK_FILTERS: { id: QuickFilter; label: string }[] = [
-  { id: "needs_person", label: "Needs a person" },
-  { id: "unassigned", label: "Unassigned" },
-  { id: "slot_at_risk", label: "Slot at risk" },
-  { id: "no_touch", label: "Ready, no touch" },
-];
 
 export function matchesQuick(row: Row, f: QuickFilter): boolean {
   switch (f) {

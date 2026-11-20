@@ -1,10 +1,17 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { BarChart3, Clock, Home, PanelLeftClose, PanelLeftOpen, Settings, type LucideIcon } from "lucide-react";
+import { BarChart3, Home, Moon, PanelLeftClose, PanelLeftOpen, Search, Settings, Sun, type LucideIcon } from "lucide-react";
+import { CommandPalette } from "@/components/CommandPalette";
+import { firstName } from "@/components/AssignMenu";
+import { Avatar } from "@/components/ui/avatar";
+import { MenuItem, Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tip } from "@/components/ui/tooltip";
 import { DEMO_NOW } from "@/data/orders";
 import { PEOPLE } from "@/data/people";
-import { fmtDemoClock } from "@/lib/format";
+import { cn } from "@/lib/cn";
+import { fmtTableDate } from "@/lib/format";
 import { usePersona } from "@/lib/persona";
+import { useTheme } from "@/lib/theme";
 
 const COLLAPSE_KEY = "halcyon.sidebar.collapsed.v1";
 
@@ -12,28 +19,20 @@ interface NavItem {
   to: string;
   label: string;
   icon: LucideIcon;
-  /** Extra path prefixes that should keep this item highlighted (e.g. case view lives under Home). */
+  /** Extra path prefixes that keep this item selected (the case view lives under Worklist). */
   alsoActiveFor?: string[];
 }
 
 const MAIN_NAV: NavItem[] = [
-  { to: "/", label: "Home", icon: Home, alsoActiveFor: ["/case"] },
+  { to: "/", label: "Worklist", icon: Home, alsoActiveFor: ["/case"] },
   { to: "/analytics", label: "Analytics", icon: BarChart3 },
 ];
 
 const FOOTER_NAV: NavItem[] = [{ to: "/settings", label: "Settings", icon: Settings }];
 
-function pageTitle(pathname: string): string {
-  if (pathname.startsWith("/case")) return "Case review";
-  if (pathname.startsWith("/analytics")) return "Analytics";
-  if (pathname.startsWith("/settings")) return "Settings";
-  return "Worklist";
-}
-
 export default function AppShell() {
   const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem(COLLAPSE_KEY) === "1");
   const { pathname } = useLocation();
-  const { me, setMeId } = usePersona();
 
   useEffect(() => {
     localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0");
@@ -41,26 +40,22 @@ export default function AppShell() {
 
   return (
     <div className="flex h-full">
-      {/* Sidebar */}
       <aside
         aria-label="Primary"
-        className={`flex shrink-0 flex-col border-r border-slate-200 bg-white transition-[width] duration-200 ${
-          collapsed ? "w-[68px]" : "w-60"
-        }`}
+        className={cn(
+          "flex shrink-0 flex-col border-r border-line bg-sidebar",
+          collapsed ? "w-12" : "w-56",
+        )}
       >
-        <div className={`flex h-14 items-center border-b border-slate-200 ${collapsed ? "justify-center" : "gap-3 px-4"}`}>
-          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-sm font-bold text-white">
-            H
-          </div>
-          {!collapsed && (
-            <div className="min-w-0 leading-tight">
-              <div className="truncate text-sm font-semibold">Halcyon Health</div>
-              <div className="truncate text-xs text-slate-500">Prior authorization</div>
-            </div>
+        <div className={cn("flex h-12 items-center", collapsed ? "justify-center" : "px-4")}>
+          {collapsed ? (
+            <span className="text-emph text-fg">H</span>
+          ) : (
+            <span className="truncate text-emph text-fg">Halcyon Health</span>
           )}
         </div>
 
-        <nav className="flex flex-1 flex-col gap-1 p-2">
+        <nav className="flex flex-1 flex-col gap-1 px-2">
           {MAIN_NAV.map((item) => (
             <SidebarLink key={item.to} item={item} collapsed={collapsed} pathname={pathname} />
           ))}
@@ -71,55 +66,88 @@ export default function AppShell() {
           </div>
         </nav>
 
-        <div className="border-t border-slate-200 p-2">
-          <button
-            type="button"
-            onClick={() => setCollapsed((c) => !c)}
-            aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            aria-expanded={!collapsed}
-            title={collapsed ? "Expand sidebar" : "Collapse sidebar"}
-            className={`flex w-full items-center rounded-md py-2 text-sm text-slate-500 hover:bg-slate-100 hover:text-slate-800 ${
-              collapsed ? "justify-center" : "gap-3 px-3"
-            }`}
-          >
-            {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
-            {!collapsed && <span>Collapse</span>}
-          </button>
-        </div>
+        <SidebarFooter collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
       </aside>
 
-      {/* Content */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-6">
-          <div className="whitespace-nowrap text-sm font-medium text-slate-700">{pageTitle(pathname)}</div>
-          <div className="flex items-center gap-4">
-            <span
-              className="inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-slate-100 px-2 py-1 text-xs text-slate-600"
-              title="Prototype clock. Fixed so scan dates and time-in-status in the sample data stay consistent."
-            >
-              <Clock size={13} /> Demo clock · {fmtDemoClock(DEMO_NOW)}
-            </span>
-            <label className="flex items-center gap-2 whitespace-nowrap text-xs text-slate-500">
-              Viewing as
-              <select
-                value={me.id}
-                onChange={(e) => setMeId(e.target.value)}
-                className="rounded-md border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-800"
-              >
-                {PEOPLE.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name} ({p.role})
-                  </option>
-                ))}
-              </select>
-            </label>
-          </div>
-        </header>
-
-        <div className="min-h-0 flex-1 overflow-auto">
-          <Outlet />
-        </div>
+      <div className="min-h-0 min-w-0 flex-1 overflow-auto">
+        <Outlet />
       </div>
+      <CommandPalette />
+    </div>
+  );
+}
+
+function SidebarFooter({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const { me, setMeId } = usePersona();
+  const { theme, toggle } = useTheme();
+  const [open, setOpen] = useState(false);
+
+  return (
+    <div className={cn("flex gap-1 p-2", collapsed ? "flex-col items-center" : "items-center")}>
+      <Popover open={open} onOpenChange={setOpen}>
+        <Tip content="Viewing as" side="right">
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Viewing as"
+              className={cn("flex h-8 items-center gap-2 rounded-md px-1 hover:bg-chip", !collapsed && "min-w-0 flex-1")}
+            >
+              <Avatar name={me.name} />
+              {!collapsed && <span className="truncate text-body text-fg">{firstName(me)}</span>}
+            </button>
+          </PopoverTrigger>
+        </Tip>
+        <PopoverContent side="top" className="w-56">
+          {PEOPLE.map((p) => (
+            <MenuItem
+              key={p.id}
+              selected={p.id === me.id}
+              onClick={() => {
+                setMeId(p.id);
+                setOpen(false);
+              }}
+            >
+              <Avatar name={p.name} />
+              {p.name}
+              <span className="ml-auto text-caption text-fg-3">{p.role === "nurse" ? "Nurse" : "Coord."}</span>
+            </MenuItem>
+          ))}
+          <div className="px-2 py-1 text-caption text-fg-3" title="Fixed so dates in the sample data stay consistent.">
+            Demo clock · {fmtTableDate(DEMO_NOW)}
+          </div>
+        </PopoverContent>
+      </Popover>
+      <Tip content="Search" shortcut="⌘K" side="right">
+        <button
+          type="button"
+          aria-label="Search"
+          onClick={() => window.dispatchEvent(new KeyboardEvent("keydown", { key: "k", metaKey: true }))}
+          className="flex size-8 items-center justify-center rounded-md text-fg-2 hover:bg-chip hover:text-fg"
+        >
+          <Search size={16} />
+        </button>
+      </Tip>
+      <Tip content={theme === "dark" ? "Light mode" : "Dark mode"} side="right">
+        <button
+          type="button"
+          aria-label="Toggle theme"
+          onClick={toggle}
+          className="flex size-8 items-center justify-center rounded-md text-fg-2 hover:bg-chip hover:text-fg"
+        >
+          {theme === "dark" ? <Sun size={16} /> : <Moon size={16} />}
+        </button>
+      </Tip>
+      <Tip content={collapsed ? "Expand" : "Collapse"} side="right">
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
+          aria-expanded={!collapsed}
+          className="flex size-8 items-center justify-center rounded-md text-fg-2 hover:bg-chip hover:text-fg"
+        >
+          {collapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
+        </button>
+      </Tip>
     </div>
   );
 }
@@ -128,25 +156,29 @@ function SidebarLink({ item, collapsed, pathname }: { item: NavItem; collapsed: 
   const Icon = item.icon;
   const extra = item.alsoActiveFor?.some((p) => pathname.startsWith(p)) ?? false;
 
-  return (
+  const link = (
     <NavLink
       to={item.to}
       end={item.to === "/"}
-      title={collapsed ? item.label : undefined}
       aria-label={item.label}
-      className={({ isActive }) => {
-        const active = isActive || extra;
-        return `flex items-center rounded-md py-2 text-sm transition ${
-          collapsed ? "justify-center" : "gap-3 px-3"
-        } ${
-          active
-            ? "bg-indigo-50 font-medium text-indigo-700"
-            : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
-        }`;
-      }}
+      className={({ isActive }) =>
+        cn(
+          "flex h-8 items-center rounded-md text-body transition-colors",
+          collapsed ? "justify-center" : "gap-2 px-2",
+          isActive || extra ? "bg-hover font-medium text-accent-fg" : "text-label hover:bg-hover hover:text-fg",
+        )
+      }
     >
-      <Icon size={18} className="shrink-0" />
+      <Icon size={16} className="shrink-0" />
       {!collapsed && <span className="truncate">{item.label}</span>}
     </NavLink>
   );
+  return collapsed ? (
+    <Tip content={item.label} side="right">
+      {link}
+    </Tip>
+  ) : (
+    link
+  );
 }
+
