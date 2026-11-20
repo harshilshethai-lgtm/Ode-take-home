@@ -1,0 +1,95 @@
+{
+  "case": 1,
+  "name": "Kirk",
+  "description": "Lumbar MRI, Federation Health, clean 3-page EHR printout. All criteria met.",
+  "input": {
+    "file": "fixtures/case-1-kirk/input.pdf",
+    "pages": [
+      { "page": 1, "type": "office_note", "title": "Imaging order requisition + progress note 11/09/2026" },
+      { "page": 2, "type": "imaging_report", "title": "Problem list, medications, imaging history, XR lumbar spine 10/02/2026" },
+      { "page": 3, "type": "pt_note", "title": "Starbase Physical Therapy discharge summary (outside record, faxed 11/02/2026)" }
+    ]
+  },
+  "answer_key_file": "fixtures/case-1-kirk/expected-output.pdf",
+  "order": {
+    "orderNumber": "ORD-58213",
+    "patient": { "name": "James T. Kirk", "mrn": "HH-0017011", "dob": "1981-03-22" },
+    "orderedAt": "2026-11-09T10:12:00",
+    "orderedBy": "Leonard McCoy, MD (NPI 1700000017)",
+    "study": "MRI Lumbar Spine w/o contrast",
+    "cpt": "72148",
+    "dx": "M54.16 Radiculopathy, lumbar region",
+    "priority": "Routine",
+    "setting": "outpatient",
+    "scheduledAt": "2026-11-18T14:30:00",
+    "location": "Enterprise Campus MRI 2",
+    "authStatus": "Needed, not started",
+    "insurer": "Federation Health"
+  },
+  "expected": {
+    "inputShape": "Clean 3-page EHR printout",
+    "approvalNeeded": true,
+    "approvalNeededReason": "Federation Health RAD-114 requires approval for CPT 72148.",
+    "packetComplete": true,
+    "missingItems": [],
+    "decision": "Submit to the insurer. No nurse review needed.",
+    "status": "ready_to_submit",
+    "writtenReason": "8 weeks of low back pain with right S1 radicular signs. 6 weeks of PT (12 visits) and 4 weeks of naproxen failed. Lumbar X-ray done 10/02. No lumbar MRI on record. Meets RAD-114 criteria 2a to 2d.",
+    "submitVia": "Federation Health API",
+    "channel": "api",
+    "attachments": [
+      { "name": "Progress note 11/09", "page": 1 },
+      { "name": "PT discharge summary", "page": 3 },
+      { "name": "X-ray report 10/02", "page": 2 }
+    ],
+    "timeRisk": "on_track",
+    "policy": { "id": "RAD-114", "version": 3 },
+    "criteria": [
+      {
+        "id": "2a",
+        "label": "Pain for 6+ weeks",
+        "result": "met",
+        "proof": "HPI: began ~09/14/2026, \"x 8 weeks\"",
+        "citations": [
+          { "page": 1, "quote": "Low back pain radiating down R leg x 8 weeks." },
+          { "page": 1, "quote": "low back pain that began ~09/14/2026" }
+        ]
+      },
+      {
+        "id": "2b",
+        "label": "6+ weeks of conservative treatment, documented",
+        "result": "met",
+        "proof": "PT discharge summary: 12 visits, 9/21 to 10/31. Med list: naproxen 9/28 to 10/26.",
+        "citations": [
+          { "page": 3, "quote": "Visits: 12 attended, 0 missed" },
+          { "page": 3, "quote": "Dates of care: 9/21/2026 to 10/31/2026" },
+          { "page": 2, "quote": "Naproxen 500 mg tab 1 tab PO BID 09/28/2026 10/26/2026 Stopped, GI upset" }
+        ]
+      },
+      {
+        "id": "2c",
+        "label": "X-rays first",
+        "result": "met",
+        "proof": "Radiology report, XR lumbar spine 10/02/2026",
+        "citations": [{ "page": 2, "quote": "EXAM: XR LUMBAR SPINE 2-3 VIEWS, 10/02/2026 9:14 AM" }]
+      },
+      {
+        "id": "2d",
+        "label": "No lumbar MRI in 12 months",
+        "result": "met",
+        "proof": "Imaging history: \"No MRI of the lumbar spine on record.\"",
+        "citations": [{ "page": 2, "quote": "No MRI of the lumbar spine on record." }]
+      }
+    ],
+    "redFlags": {
+      "found": [],
+      "proof": "HPI: denies bowel or bladder changes, saddle numbness, fever, weight loss, cancer",
+      "citations": [
+        {
+          "page": 1,
+          "quote": "Denies bowel or bladder changes, saddle numbness, fever, chills, night sweats or weight loss. No history of cancer."
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,77 @@
+{
+  "policy": "RAD-114",
+  "title": "Advanced imaging: MRI of the lumbar spine",
+  "version": 3,
+  "effective": "2026-01-01",
+  "source": {
+    "document": "fixtures/policies/insurer-policy-excerpts.pdf",
+    "page": 1,
+    "label": "Federation Health · Medical Policy RAD-114"
+  },
+  "match": {
+    "insurer": "Federation Health",
+    "plan": "*",
+    "cpt": ["72148", "72149", "72158"],
+    "setting": ["outpatient"]
+  },
+  "approval_required": true,
+  "criteria": {
+    "all": [
+      {
+        "id": "2a",
+        "label": "Low back pain for 6+ weeks",
+        "policy_text": "Low back pain, with or without radicular symptoms, for 6 weeks or more",
+        "fact": "symptom_duration_weeks",
+        "op": ">=",
+        "value": 6,
+        "fail_class": "clinical"
+      },
+      {
+        "id": "2b",
+        "label": "6+ weeks of conservative treatment, documented",
+        "policy_text": "6 weeks or more of conservative treatment in the past 6 months, such as physical therapy, chiropractic care or prescription medication, with documentation of the treatment and the response",
+        "fact": "conservative_treatment.total_weeks",
+        "op": ">=",
+        "value": 6,
+        "lookback_months": 6,
+        "sources": ["pt_note", "clinic_note", "med_list"],
+        "reject": ["patient_reported"],
+        "fail_class": "documents"
+      },
+      {
+        "id": "2c",
+        "label": "X-rays first",
+        "policy_text": "Plain X-rays of the lumbar spine, unless a red-flag condition is present",
+        "fact": "xray_same_region",
+        "op": "exists",
+        "fail_class": "documents"
+      },
+      {
+        "id": "2d",
+        "label": "No lumbar MRI in 12 months",
+        "policy_text": "No lumbar MRI in the past 12 months, unless symptoms have materially changed",
+        "fact": "prior_mri_same_region",
+        "op": "not_within_months",
+        "value": 12,
+        "exception": { "fact": "symptoms_materially_changed", "op": "==", "value": true },
+        "fail_class": "clinical"
+      }
+    ]
+  },
+  "waivers": [
+    {
+      "section": "3",
+      "when": {
+        "fact": "red_flags",
+        "op": "any_of",
+        "value": ["cauda_equina", "progressive_deficit", "infection", "malignancy", "trauma"]
+      },
+      "waives": ["2a", "2b", "2c"]
+    }
+  ],
+  "submission": {
+    "channel": "api",
+    "attachments": ["latest_office_note", "conservative_treatment_docs"],
+    "amend_after_denial": true
+  }
+}
