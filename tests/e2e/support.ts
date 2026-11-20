@@ -1,5 +1,6 @@
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { createWriteStream, mkdirSync, readdirSync } from "node:fs";
+import { createWriteStream, mkdirSync } from "node:fs";
+import { fixturePath } from "@/lib/fixtureFiles";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 
 export const LOCAL_BASE = "http://127.0.0.1:5199";
@@ -119,10 +120,9 @@ export function shotDir(): string {
 }
 
 export function fixturePdf(file: string): string {
-  if (file === "policy") return "fixtures/policies/insurer-policy-excerpts.pdf";
-  const folder = readdirSync("fixtures").find((name) => name.startsWith("case-") && name.endsWith(`-${file}`));
-  if (!folder) throw new Error(`No fixture PDF for ${file}`);
-  return `fixtures/${folder}/input.pdf`;
+  const path = fixturePath(file);
+  if (!path) throw new Error(`No fixture PDF for ${file}`);
+  return path;
 }
 
 /** Scott's cover lists fax page 4, which is not in the file. Later fax pages shift back one PDF page. */
@@ -137,6 +137,16 @@ export function citedPdfPage(file: string, label: string): number | null {
 }
 
 const textCache = new Map<string, { text: string; source: "extracted" | "ocr" }>();
+const ocrCache = new Map<string, string>();
+
+export function ocrCitedPage(file: string, page: number): string {
+  const key = `${file}:${page}`;
+  const cached = ocrCache.get(key);
+  if (cached != null) return cached;
+  const text = execFileSync(ocrBin, [fixturePdf(file), String(page)], { encoding: "utf8" });
+  ocrCache.set(key, text);
+  return text;
+}
 
 export async function textOfCitedPage(file: string, page: number): Promise<{ text: string; source: "extracted" | "ocr" }> {
   const key = `${file}:${page}`;
@@ -146,7 +156,7 @@ export async function textOfCitedPage(file: string, page: number): Promise<{ tex
   const extracted = await pdfText(path, page);
   const result = extracted.trim()
     ? { text: extracted, source: "extracted" as const }
-    : { text: execFileSync(ocrBin, [path, String(page)], { encoding: "utf8" }), source: "ocr" as const };
+    : { text: ocrCitedPage(file, page), source: "ocr" as const };
   textCache.set(key, result);
   return result;
 }

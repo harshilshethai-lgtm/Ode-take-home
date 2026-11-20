@@ -11,7 +11,8 @@ describe("case record", () => {
     expect(sentences(record.summary)).toBeLessThanOrEqual(2);
     expect(record.criteria.map((c) => c.status)).toEqual(["met", "met", "met", "met"]);
     expect(record.elements.length).toBeLessThanOrEqual(8);
-    expect(record.documents.map((d) => d.file)).toEqual(["kirk"]);
+    expect(record.documents.map((d) => d.file)).toEqual(["kirk", "kirk", "kirk", "kirk", "kirk"]);
+    expect(new Set(record.criteria.flatMap((row) => row.cites.map((cite) => cite.docId))).size).toBeGreaterThanOrEqual(3);
     for (const el of record.elements) {
       if (el.label === "Policy") continue;
       expect(el.cite ?? el.origin, el.label).toBeTruthy();
@@ -23,7 +24,7 @@ describe("case record", () => {
     const scott = buildCaseRecord(SEED_ORDERS.find((o) => o.id === "case-2-scott")!);
     const sulu = buildCaseRecord(SEED_ORDERS.find((o) => o.id === "case-3-sulu")!);
     expect(scott.documents.map((d) => d.file)).toEqual(["scott"]);
-    expect(sulu.documents.map((d) => d.file)).toEqual(["sulu"]);
+    expect(sulu.documents.map((d) => d.file)).toEqual(["sulu", "sulu-note"]);
     expect(scott.primaryLabel).toBe("Request records");
     expect(sulu.primaryLabel).toBe("Send draft");
     expect(scott.criteria.map((c) => c.status)).toEqual(["met", "unknown", "met", "unknown"]);
@@ -36,14 +37,14 @@ describe("case record", () => {
 
   it("every case opens a different packet", () => {
     const files = new Set<string>();
-    expect(SEED_ORDERS).toHaveLength(25);
+    expect(SEED_ORDERS).toHaveLength(27);
     for (const order of SEED_ORDERS) {
       const docs = buildCaseRecord(order).documents;
       if (order.status === "processing") {
         expect(docs, order.id).toHaveLength(0);
         continue;
       }
-      expect(docs, order.id).toHaveLength(1);
+      expect(docs.length, order.id).toBeGreaterThan(0);
       expect(files.has(docs[0].file), docs[0].file).toBe(false);
       files.add(docs[0].file);
     }

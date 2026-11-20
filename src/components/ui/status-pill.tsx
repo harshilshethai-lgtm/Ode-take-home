@@ -11,17 +11,20 @@ import { statusTone } from "@/lib/statusTone";
 export function StatusPill({
   status,
   reasonCode = null,
+  label,
 }: {
   status: StatusId;
   channel: Channel | null;
   reasonCode?: string | null;
   confirmOnly?: boolean;
   linked?: boolean;
+  /** Replaces the catalog label after a pipeline finishes. */
+  label?: string | null;
 }) {
   const presentation = presentStatus({
     status: toOrderStatus(status),
     reason: toReasonCode(reasonCode),
     linkedApproval: false,
   });
-  return <StatusLabel tone={statusTone(status, reasonCode)}>{presentation.label}</StatusLabel>;
+  return <StatusLabel tone={statusTone(status, reasonCode)}>{label || presentation.label}</StatusLabel>;
 }

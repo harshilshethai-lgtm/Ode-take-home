@@ -27,6 +27,7 @@ export interface InsurerPanelModel {
   latestRaw: string | null;
   lastCheckedLabel: string | null;
   nextCheckLabel: string | null;
+  nextCheckAt: string | null;
   approval: { number: string; cpt: string; units: string; validFrom: string; validTo: string; matched: boolean } | null;
   sent: Array<{ label: string; pages: string }>;
   packetUrl: string | null;
@@ -112,6 +113,7 @@ export function buildInsurerPanel(args: {
     latestRaw: latestRawText(latest),
     lastCheckedLabel: lastCheck ? fmtTableDate(new Date(lastCheck.finishedAt)) : null,
     nextCheckLabel: args.nextCheckAt ? nextCheckLabel(args.nextCheckAt) : null,
+    nextCheckAt: args.nextCheckAt ?? null,
     approval: args.approval
       ? {
           number: args.approval.number,

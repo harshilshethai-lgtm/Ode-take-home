@@ -3,6 +3,8 @@
 // Slot at risk is the stronger state: the insurer cannot answer in time (or the 24h scan watch has fired).
 
 import { medianDecisionHours } from "@/data/operations/throughput";
+import { businessDaysOnly } from "@/domain/insurer/config";
+import { demoDateKey, parseDemoInstant } from "@/lib/demoClock";
 import { isClosed, type StatusId } from "./statuses";
 
 const SUBMIT_BUFFER_HOURS = 4;
@@ -88,10 +90,57 @@ export function hoursUntil(scanAt: Date, now: Date): number {
   return (scanAt.getTime() - now.getTime()) / 36e5;
 }
 
-/** Latest moment to submit so the insurer's median decision still lands 4 hours before the scan. */
+/** Hours on an Eastern business day, walking backward. The result is never a weekend or holiday. */
+export function subtractBusinessDayHours(start: Date, hours: number): Date {
+  let left = Math.max(0, hours);
+  let cursor = start.getTime();
+  for (let guard = 0; left > 1e-9 && guard < 5000; guard += 1) {
+    const date = new Date(cursor);
+    const dayStart = easternMidnight(date);
+    if (!isEasternBusinessDay(date)) {
+      cursor = dayStart - 1;
+      continue;
+    }
+    const room = (cursor - dayStart) / 36e5;
+    if (room <= 1e-9) {
+      cursor = dayStart - 1;
+      continue;
+    }
+    if (left <= room + 1e-9) return new Date(cursor - left * 36e5);
+    left -= room;
+    cursor = dayStart - 1;
+  }
+  return landOnBusinessDay(new Date(cursor));
+}
+
+function easternMidnight(date: Date): number {
+  return parseDemoInstant(`${demoDateKey(date)}T00:00:00`).getTime();
+}
+
+function isEasternBusinessDay(date: Date): boolean {
+  const key = demoDateKey(date);
+  const [year, month, day] = key.split("-").map(Number);
+  const dow = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+  return dow !== 0 && dow !== 6 && !HOLIDAYS.has(key);
+}
+
+function landOnBusinessDay(date: Date): Date {
+  let cursor = date.getTime();
+  for (let guard = 0; guard < 14 && !isEasternBusinessDay(new Date(cursor)); guard += 1) {
+    cursor = easternMidnight(new Date(cursor)) - 1;
+  }
+  return new Date(cursor);
+}
+
+/**
+ * Latest moment to submit so the insurer's median decision still lands before the scan,
+ * with 4 business hours of buffer. Business-day insurers subtract the median in business
+ * hours too, and the result never falls on a weekend.
+ */
 export function submitByAt(scanAt: Date, insurer: string | null): Date {
   const median = medianDecisionHours(insurer);
-  return new Date(scanAt.getTime() - (median + SUBMIT_BUFFER_HOURS) * 36e5);
+  if (businessDaysOnly(insurer)) return subtractBusinessDayHours(scanAt, median + SUBMIT_BUFFER_HOURS);
+  return subtractBusinessDayHours(new Date(scanAt.getTime() - median * 36e5), SUBMIT_BUFFER_HOURS);
 }
 
 /**

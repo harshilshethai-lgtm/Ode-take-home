@@ -47,7 +47,17 @@ export default function AppShell() {
     setCaseExpanded(false);
   }, [pathname]);
 
-  const collapsed = onCase ? !caseExpanded : storedCollapsed;
+  const [narrow, setNarrow] = useState(false);
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const query = window.matchMedia("(max-width: 1279px)");
+    const apply = () => setNarrow(query.matches);
+    apply();
+    query.addEventListener("change", apply);
+    return () => query.removeEventListener("change", apply);
+  }, []);
+  // The worklist's columns need the width. Below 1280 the rail is icons so nothing but Next step has to truncate.
+  const collapsed = onCase ? !caseExpanded : storedCollapsed || (narrow && pathname === "/");
 
   useEffect(() => {
     if (onCase) return;

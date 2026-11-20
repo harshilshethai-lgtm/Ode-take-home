@@ -1,0 +1,99 @@
+%PDF-1.4
+1 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier >> 
+endobj
+2 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Courier-Bold >> 
+endobj
+3 0 obj
+<< /Length 768 >>
+stream
+BT
+/F1 9 Tf
+36 758 Td
+(FEDERATION HEALTH | Utilization management) Tj
+ET
+BT
+/F2 14 Tf
+48 730 Td
+(Denial of prior authorization) Tj
+ET
+BT
+/F2 11 Tf
+48 708 Td
+(Patient: Nyota Uhura) Tj
+ET
+BT
+/F2 11 Tf
+48 692 Td
+(DOB: 07/19/1959) Tj
+ET
+BT
+/F2 11 Tf
+48 676 Td
+(MRN: HH-0017301) Tj
+ET
+BT
+/F2 11 Tf
+48 660 Td
+(Date: November 9, 2026) Tj
+ET
+BT
+/F2 11 Tf
+48 644 Td
+(Study: MRI lumbar spine 72148) Tj
+ET
+BT
+/F2 11 Tf
+48 628 Td
+(Reference: FH-DEN-58340) Tj
+ET
+BT
+/F2 11 Tf
+48 612 Td
+() Tj
+ET
+BT
+/F2 11 Tf
+48 596 Td
+(This request is denied under RAD-114 section 2b.) Tj
+ET
+BT
+/F2 11 Tf
+48 580 Td
+(Section 2b requires documented conservative care.) Tj
+ET
+BT
+/F2 11 Tf
+48 564 Td
+(The PT notes were not included.) Tj
+ET
+BT
+/F1 8 Tf
+48 48 Td
+(Federation Health | denial letter) Tj
+ET
+endstream 
+endobj
+4 0 obj
+<< /Type /Page /Parent 5 /MediaBox [0 0 612 792] /Contents 3 0 R /Resources << /Font << /F1 1 0 R /F2 2 0 R >> >> >> 
+endobj
+5 0 obj
+<< /Type /Pages /Count 1 /Kids [4 0 R] >> 
+endobj
+6 0 obj
+<< /Type /Catalog /Pages 5 0 R >> 
+endobj
+xref
+0 7
+0000000000 65535 f 
+0000000009 00000 n 
+0000000078 00000 n 
+0000000152 00000 n 
+0000000972 00000 n 
+0000001105 00000 n 
+0000001163 00000 n 
+trailer << /Size 7 /Root 6 0 R >>
+startxref
+1213
+%%EOF

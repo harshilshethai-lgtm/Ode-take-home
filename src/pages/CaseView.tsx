@@ -1,22 +1,28 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, MoreHorizontal } from "lucide-react";
 import { PACKET_URLS } from "@/lib/packetUrls";
 import { AssignMenu } from "@/components/AssignMenu";
 import { DocumentPane, type OpenCite } from "@/components/case/DocumentPane";
 import { CaseLayout, type AppliedCase } from "@/components/case/CaseLayout";
-import { citeLabel, policyAttachment } from "@/components/case/packetView";
+import { policyAttachment } from "@/components/case/packetView";
 import { PageTitle } from "@/components/ui/page-title";
 import { StatusPill } from "@/components/ui/status-pill";
-import { CiteFormatProvider } from "@/components/ui/citation-chip";
+import { DocumentsProvider } from "@/components/ui/citation-chip";
+import { MenuItem, Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tip } from "@/components/ui/tooltip";
 import { useOrderCheck } from "@/lib/useOrderCheck";
 import { DEMO_NOW } from "@/data/orders";
 import { ownerRoleFor, isClosed } from "@/domain/statuses";
 import { buildCaseRecord, type CaseRecord } from "@/domain/caseRecord";
-import { previewInsurerPanel, type InsurerPanelModel } from "@/domain/insurer/view";
+import { previewInsurerPanel } from "@/domain/insurer/view";
+import { statusActivity } from "@/domain/caseStatus";
+import { checkIsDue, runStatusCheck, settleDueCheck, type SettledCheck } from "@/domain/statusPoll";
 import { getReviewPanel } from "@/domain/review/panel";
-import { fmtDob } from "@/lib/format";
+import { submitByAt } from "@/domain/timeRisk";
+import { SUBMIT_BY_HINT, parseDemoInstant } from "@/lib/demoClock";
+import { fmtCountdown, fmtDob } from "@/lib/format";
+import { cn } from "@/lib/cn";
 import { usePersona } from "@/lib/persona";
 import { useOrders, type StatusPatch } from "@/lib/useWorklistState";
 import type { UserRole } from "@/domain/priorAuth/types";
@@ -30,7 +36,7 @@ const isTyping = (t: EventTarget | null) =>
 export default function CaseView() {
   const { id } = useParams();
   const goBack = useWorklistBack();
-  const { orders, assign, applyStatus } = useOrders();
+  const { orders, assign, applyStatus, startInboundFax } = useOrders();
   const { me } = usePersona();
   const order = orders.find((o) => o.id === id);
   const record = useMemo(() => (order ? buildCaseRecord(order) : null), [order]);
@@ -65,21 +71,10 @@ export default function CaseView() {
       me={me}
       assign={(pid) => assign([order.id], pid)}
       applyStatus={applyStatus}
+      onInboundFax={() => startInboundFax(order.id)}
       onBack={goBack}
     />
   );
-}
-
-function noteExtraChecks(panel: InsurerPanelModel | null, extra: number): InsurerPanelModel | null {
-  if (!panel || extra === 0) return panel;
-  return {
-    ...panel,
-    lastCheckedLabel: "Just now",
-    timeline: [
-      { id: `extra-${extra}`, kind: "status", time: "Just now", channel: panel.channelLabel, result: `${extra} ${extra === 1 ? "check" : "checks"}, no change, last just now` },
-      ...panel.timeline,
-    ],
-  };
 }
 
 function useWorklistBack() {
@@ -104,6 +99,7 @@ function CaseBody({
   me,
   assign,
   applyStatus,
+  onInboundFax,
   onBack,
 }: {
   record: CaseRecord;
@@ -112,16 +108,37 @@ function CaseBody({
   me: ReturnType<typeof usePersona>["me"];
   assign: (personId: string | null) => void;
   applyStatus: (id: string, patch: StatusPatch) => void;
+  onInboundFax: () => void;
   onBack: () => void;
 }) {
   const check = useOrderCheck(order.orderNumber);
   const policy = policyAttachment(order.policyRef, check.evaluation?.rulesSnapshot?.sourceDocument ?? null);
-  const formatCite = useCallback(
-    (page: number) => citeLabel(record.documents[0]?.file, record.documents[0]?.title, page),
-    [record],
-  );
-  const [checks, setChecks] = useState(0);
-  const insurer = useMemo(() => noteExtraChecks(previewInsurerPanel(order), checks), [order, checks]);
+  const insurer = useMemo(() => previewInsurerPanel(order), [order]);
+  const overdue = checkIsDue(order);
+  const [pollState, setPollState] = useState<{ id: string; check: SettledCheck | null } | null>(null);
+  const poll = pollState?.id === order.id ? pollState.check : null;
+  useEffect(() => {
+    setPollState({ id: order.id, check: overdue ? settleDueCheck(order) : null });
+  }, [order, overdue]);
+  const shownInsurer = useMemo(() => {
+    if (!insurer) return null;
+    if (overdue && !poll?.ran) return { ...insurer, nextCheckLabel: "Overdue" };
+    if (!poll?.ran || !poll.timeline) return { ...insurer, nextCheckLabel: insurer.nextCheckLabel?.endsWith("ago") ? "Overdue" : insurer.nextCheckLabel };
+    return {
+      ...insurer,
+      latestLabel: poll.latestLabel,
+      latestRaw: null,
+      lastCheckedLabel: poll.lastCheckedLabel,
+      nextCheckLabel: poll.nextCheckLabel,
+      nextCheckAt: poll.nextCheckAt,
+      timeline: [poll.timeline, ...insurer.timeline],
+    };
+  }, [insurer, overdue, poll]);
+  const shownPanel = useMemo(() => {
+    if (!poll?.activity) return panel;
+    return { ...panel, activity: [poll.activity, ...statusActivity(order)] };
+  }, [panel, poll, order]);
+  const submitBy = order.scheduledAt ? submitByAt(parseDemoInstant(order.scheduledAt), order.insurer) : null;
   const [target, setTarget] = useState<OpenCite | null>(
     record.documents[0] ? { docId: record.documents[0].id, page: record.documents[0].initialPage } : null,
   );
@@ -139,7 +156,7 @@ function CaseBody({
   };
 
   return (
-    <CiteFormatProvider format={formatCite}>
+    <DocumentsProvider documents={record.documents}>
       <CaseSplit
         work={
           <div className="w-full p-6">
@@ -152,7 +169,25 @@ function CaseBody({
               <h1 className="text-display text-fg">{caseTitle(order)}</h1>
               {order.patient && <span className="text-body text-fg-2">{fmtDob(order.patient.dob)}</span>}
               {order.orderNumber && <span className="font-mono text-caption text-fg-2">{order.orderNumber}</span>}
-              <StatusPill status={order.status} channel={order.channel} reasonCode={order.reasonCode} />
+              <StatusPill status={order.status} channel={order.channel} reasonCode={order.reasonCode} label={order.statusLabel} />
+              <span className="text-body text-fg-2">{order.priority}</span>
+              {submitBy && (
+                <Tip content={SUBMIT_BY_HINT}>
+                  <span className={cn("text-body tabular", submitBy.getTime() < DEMO_NOW.getTime() && "text-warning")}>
+                    {submitBy.getTime() < DEMO_NOW.getTime() ? `Past due ${fmtCountdown(submitBy, DEMO_NOW).replace(/ ago$/, "")}` : `Submit by ${fmtCountdown(submitBy, DEMO_NOW).replace(/^in /, "")}`}
+                  </span>
+                </Tip>
+              )}
+              <Popover>
+                <PopoverTrigger asChild>
+                  <button type="button" aria-label="Case actions" className="flex size-7 items-center justify-center rounded-md text-fg-2 hover:bg-hover hover:text-fg">
+                    <MoreHorizontal size={16} />
+                  </button>
+                </PopoverTrigger>
+                <PopoverContent>
+                  <MenuItem onClick={onInboundFax}>Simulate inbound fax</MenuItem>
+                </PopoverContent>
+              </Popover>
               <span className="ml-auto">
                 <AssignMenu role={role} assigneeId={order.assigneeId} me={me} closed={isClosed(order.status)} onAssign={assign} />
               </span>
@@ -160,13 +195,14 @@ function CaseBody({
             <CaseLayout
               order={order}
               record={record}
-              panel={panel}
+              panel={shownPanel}
               role={me.role as UserRole}
               actorId={me.id}
               onOpen={openCite}
               onApplied={apply}
-              insurer={insurer}
-              onCheckNow={insurer ? () => setChecks((count) => count + 1) : undefined}
+              onInboundFax={onInboundFax}
+              insurer={shownInsurer}
+              onCheckNow={shownInsurer ? () => setPollState({ id: order.id, check: runStatusCheck(order) }) : undefined}
             />
           </div>
         }
@@ -181,7 +217,7 @@ function CaseBody({
           />
         }
       />
-    </CiteFormatProvider>
+    </DocumentsProvider>
   );
 }
 

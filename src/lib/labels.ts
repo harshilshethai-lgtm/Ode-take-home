@@ -43,12 +43,17 @@ export const CRITERION_STATUS_COUNT: Record<CriterionStatus, string> = {
 };
 
 /**
- * Sub-tag on a Not met row. fixable means a record could change the result.
- * The engine's failure type is the source; the UI does not decide which applies.
+ * Sub-tag on a failing row.
+ * fixable: a document that already exists somewhere else would change the result.
+ * time: the recorded duration is short of the policy.
+ * order: the study was never done, so it needs a new order.
+ * clinical: none of those.
  */
-export const NOT_MET_TAG: Record<"clinical" | "fixable", string> = {
+export const NOT_MET_TAG: Record<"clinical" | "fixable" | "time" | "order", string> = {
   clinical: "Clinical",
   fixable: "Fixable with records",
+  time: "Needs time",
+  order: "Needs new order",
 };
 
 /** "MSK-207 · Rev. 3 (v1)". Revision is the insurer's label; vN is our rule-store version. */

@@ -179,10 +179,8 @@ export function ReviewPanelView({
           <div key={`${entry.at}-${entry.to}`} className="flex min-h-8 flex-wrap items-baseline gap-x-2 py-1 text-body">
             <span className="tabular shrink-0 text-caption text-fg-2">{fmtTableDate(new Date(entry.at))}</span>
             <span className="text-fg">{entry.actor}</span>
-            <span className="text-fg-2">
-              {entry.from} → {entry.to}
-            </span>
-            <span className="text-fg-2">{entry.reason}</span>
+            <span className="text-fg-2">{entry.from && entry.from !== entry.to ? `${entry.from} → ${entry.to}` : entry.to || entry.reason}</span>
+            {entry.from && entry.reason ? <span className="text-fg-2">{entry.reason}</span> : null}
           </div>
         ))}
       </SheetSection>
@@ -294,7 +292,7 @@ function CheckTimeline({
                 <span className="text-body text-fg">{row.label}</span>
                 <span className={cn("min-w-0 text-body", row.found.includes("pipeline error") ? "text-bad" : "text-fg-2")}>{row.found}</span>
                 {row.page && row.docId && !locked ? (
-                  <CitationChip page={row.page} excerpt={row.quote} onOpen={() => onOpen({ docId: row.docId!, page: row.page!, quote: row.quote })} />
+                  <CitationChip docId={row.docId} page={row.page} excerpt={row.quote} onOpen={() => onOpen({ docId: row.docId!, page: row.page!, quote: row.quote })} />
                 ) : null}
               </div>
             </li>
@@ -335,7 +333,7 @@ function ReviewRow({
       <span className={cn("min-w-0 text-body", valueDanger ? "text-bad" : "text-fg-2")}>{value}</span>
       <span>
         {page && docId && !locked ? (
-          <CitationChip page={page} excerpt={quote} onOpen={() => onOpen({ docId, page, quote })} />
+          <CitationChip docId={docId} page={page} excerpt={quote} onOpen={() => onOpen({ docId, page, quote })} />
         ) : null}
       </span>
     </div>

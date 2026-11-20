@@ -1,10 +1,10 @@
 import type { ViewId } from "@/lib/worklist";
 
-export const VIEW_IDS: ViewId[] = ["needs_me", "admin", "clinical", "return_to_provider", "in_flight", "with_insurer", "closed", "all"];
+export const VIEW_IDS: ViewId[] = ["needs_me", "at_risk", "admin", "clinical", "return_to_provider", "in_flight", "with_insurer", "closed", "all"];
 
 const LEGACY_VIEW: Record<string, ViewId> = {};
 
-export type SortKey = "patient" | "status" | "reason" | "insurance" | "study" | "appointment" | "provider" | "type" | "urgency" | "received" | "assignee";
+export type SortKey = "patient" | "status" | "reason" | "insurance" | "study" | "due" | "appointment" | "provider" | "type" | "urgency" | "received" | "assignee";
 export type SortDir = "asc" | "desc";
 
 export interface WorklistUrlState {
@@ -15,8 +15,6 @@ export interface WorklistUrlState {
   /** Insurer policy id. Shows every open case checked against it, across queues. */
   policy: string | null;
   hideWaiting: boolean;
-  /** Saved filter: only rows whose scan slot is at risk. */
-  slotAtRisk: boolean;
   q: string;
   sort: SortKey;
   dir: SortDir;
@@ -30,6 +28,7 @@ const SORT_KEYS = new Set<SortKey>([
   "reason",
   "insurance",
   "study",
+  "due",
   "appointment",
   "provider",
   "type",
@@ -38,7 +37,7 @@ const SORT_KEYS = new Set<SortKey>([
   "assignee",
 ]);
 
-const DEFAULT_SORT: SortKey = "appointment";
+const DEFAULT_SORT: SortKey = "due";
 const DEFAULT_DIR: SortDir = "asc";
 
 function isView(value: string | null): value is ViewId {
@@ -55,9 +54,15 @@ function isSort(value: string): value is SortKey {
   return SORT_KEYS.has(value as SortKey);
 }
 
+/** Older links sorted by the scan column. That column is now Due. */
+function sortKeyFrom(value: string): SortKey {
+  if (value === "appointment") return "due";
+  return isSort(value) ? value : DEFAULT_SORT;
+}
+
 /** Read the worklist from the query string. A missing tab uses the persona's queue. */
 export function parseWorklistUrl(params: URLSearchParams, fallbackView: ViewId): WorklistUrlState {
-  const tab = params.get("tab");
+  const tab = params.get("tab") ?? (params.get("risk") === "slot" ? "at_risk" : null);
   const rawSort = params.get("sort") ?? "";
   const desc = rawSort.startsWith("-");
   const key = desc ? rawSort.slice(1) : rawSort;
@@ -69,9 +74,8 @@ export function parseWorklistUrl(params: URLSearchParams, fallbackView: ViewId):
     insurer: params.get("insurer"),
     policy: params.get("policy"),
     hideWaiting: params.get("waiting") === "hidden",
-    slotAtRisk: params.get("risk") === "slot",
     q: params.get("q") ?? "",
-    sort: isSort(key) ? key : DEFAULT_SORT,
+    sort: sortKeyFrom(key),
     dir: rawSort === "" ? DEFAULT_DIR : desc ? "desc" : "asc",
     page: Number.isInteger(pageRaw) && pageRaw > 0 ? pageRaw - 1 : 0,
   };
@@ -86,7 +90,6 @@ export function serializeWorklistUrl(state: WorklistUrlState, fallbackView: View
   if (state.insurer) params.set("insurer", state.insurer);
   if (state.policy) params.set("policy", state.policy);
   if (state.hideWaiting) params.set("waiting", "hidden");
-  if (state.slotAtRisk) params.set("risk", "slot");
   if (state.q) params.set("q", state.q);
   if (state.sort !== DEFAULT_SORT || state.dir !== DEFAULT_DIR) {
     params.set("sort", state.dir === "desc" ? `-${state.sort}` : state.sort);

@@ -4,12 +4,13 @@ import { buildSeedDb } from "@/data/rules/seed";
 import { SEED_ORDERS, DEMO_NOW } from "@/data/orders";
 import { formatFixBy, parseDemoInstant } from "@/lib/demoClock";
 import { buildCaseRecord } from "@/domain/caseRecord";
-import { actionsFor, statusLabel, type StatusAction } from "@/domain/priorAuth/actions";
+import { actionsFor, type StatusAction } from "@/domain/priorAuth/actions";
 import { ownerRole } from "@/domain/priorAuth/catalog";
 import { toOrderStatus } from "@/domain/priorAuth/legacy";
 import type { OrderStatus, ReasonCode, UserRole } from "@/domain/priorAuth/types";
 import { incompleteHandlingOf } from "@/domain/rules/policyProperties";
 import type { PolicyVersion } from "@/domain/rules/types";
+import { statusActivity } from "@/domain/caseStatus";
 import { computeTimeRisk, submitByAt } from "@/domain/timeRisk";
 import type { Order } from "@/domain/types";
 import type { CheckResult, CheckRow, ReviewPanel } from "./types";
@@ -92,14 +93,14 @@ const FACTS: Record<string, CaseFacts> = {
         fact: "documented treatment",
         forCheckId: "conservative_care",
         rows: [
-          { source: "Office note", value: "Patient reports 6 weeks", conflict: false, quote: "about six weeks", docId: "packet", page: 3 },
-          { source: "Cover", value: "PT notes missing", conflict: false, quote: "PT progress notes", docId: "packet", page: 1 },
+          { source: "Office note", value: "Patient reports 6 weeks", conflict: false, quote: "about six weeks", docId: "scott-fax", page: 3 },
+          { source: "Cover", value: "PT notes missing", conflict: false, quote: "PT progress notes", docId: "scott-fax", page: 1 },
         ],
       },
       {
         fact: "prior MRI",
         forCheckId: "no_recent_mri",
-        rows: [{ source: "Fax", value: "Not stated", conflict: false, quote: "PT progress notes", docId: "packet", page: 1 }],
+        rows: [{ source: "Fax", value: "Not stated", conflict: false, quote: "PT progress notes", docId: "scott-fax", page: 1 }],
       },
     ],
   },
@@ -119,17 +120,22 @@ const FACTS: Record<string, CaseFacts> = {
       {
         fact: "symptom duration",
         forCheckId: "symptom_duration",
-        rows: [{ source: "Order", value: "3 weeks", conflict: false, quote: "x 3 wks", docId: "packet", page: 1 }],
+        rows: [{ source: "Visit note", value: "3 weeks", conflict: false, quote: "x 3 wks", docId: "sulu-note", page: 1 }],
       },
       {
         fact: "documented treatment",
         forCheckId: "conservative_care",
-        rows: [{ source: "Order", value: "PT started last week", conflict: false, quote: "Started PT last wk", docId: "packet", page: 1 }],
+        rows: [{ source: "Visit note", value: "PT started last week", conflict: false, quote: "Started PT last wk", docId: "sulu-note", page: 1 }],
       },
       {
         fact: "shoulder X-ray",
         forCheckId: "prior_xray",
-        rows: [{ source: "Order", value: "Not mentioned", conflict: false, quote: "MRI SHOULDER RIGHT", docId: "packet", page: 1 }],
+        rows: [{ source: "Visit note", value: "Not mentioned", conflict: false, quote: "No shoulder X-ray", docId: "sulu-note", page: 1 }],
+      },
+      {
+        fact: "red-flag waiver",
+        forCheckId: "waiver:red_flags",
+        rows: [{ source: "Visit note", value: "Waiver does not apply", conflict: false, quote: "No red flags on this exam", docId: "sulu-note", page: 1 }],
       },
     ],
   },
@@ -247,6 +253,16 @@ const FACTS: Record<string, CaseFacts> = {
         ...fax(1, "PROMENADE URGENT CARE"),
       },
     ],
+  },
+  "case-26-uhura": {
+    headline: "Appeal is with Federation Health. The PT notes are attached.",
+    hideChecks: true,
+    receivedKind: "record",
+  },
+  "case-27-chekov": {
+    headline: "Andorian Life rejected the upload. Compress the packet under 10MB and resubmit.",
+    hideChecks: true,
+    receivedKind: "record",
   },
 };
 
@@ -546,10 +562,16 @@ function documentNotes(facts: CaseFacts | undefined): CheckRow[] {
 
 function documentsFor(order: Order, facts: CaseFacts | undefined): ReviewPanel["documents"] {
   const record = buildCaseRecord(order);
-  const title = record.documents[0]?.title ?? "Packet";
-  const status = order.reasonCode === "UNREADABLE_DOCUMENT" ? "UNREADABLE" : "ATTACHED";
-  const pages = Math.max(order.attachmentCount, 1);
-  return [{ id: "packet", type: title, status, pages }, ...(facts?.extraDocuments ?? [])];
+  if (record.documents.length === 0) return facts?.extraDocuments ?? [];
+  return [
+    ...record.documents.map((doc, index) => ({
+      id: doc.id,
+      type: doc.title,
+      status: (index === 0 && order.reasonCode === "UNREADABLE_DOCUMENT" ? "UNREADABLE" : "ATTACHED") as "UNREADABLE" | "ATTACHED",
+      pages: doc.declaredPageTotal ?? doc.pages,
+    })),
+    ...(facts?.extraDocuments ?? []),
+  ];
 }
 
 function evidenceFor(facts: CaseFacts | undefined, consistency: CheckRow[], criteria: CheckRow[]): ReviewPanel["evidence"] {
@@ -573,37 +595,8 @@ function evidenceFor(facts: CaseFacts | undefined, consistency: CheckRow[], crit
     }));
 }
 
-function activityFor(order: Order, evaluatedAt: string | undefined, receivedAt: string | undefined): ReviewPanel["activity"] {
-  const status = toOrderStatus(order.status);
-  const rows: ReviewPanel["activity"] = [];
-  if (evaluatedAt && status !== "PROCESSING") {
-    rows.push({
-      at: evaluatedAt,
-      actor: "System",
-      from: statusLabel("PROCESSING"),
-      to: statusLabel(status),
-      reason: order.reason,
-    });
-  }
-  if (receivedAt) {
-    rows.push({
-      at: receivedAt,
-      actor: "System",
-      from: statusLabel("PROCESSING"),
-      to: statusLabel("PROCESSING"),
-      reason: "Packet received",
-    });
-  }
-  if (rows.length === 0) {
-    rows.push({
-      at: order.statusSince,
-      actor: "System",
-      from: statusLabel("PROCESSING"),
-      to: statusLabel(status),
-      reason: order.reason,
-    });
-  }
-  return rows.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
+function activityFor(order: Order): ReviewPanel["activity"] {
+  return statusActivity(order);
 }
 
 function snapshotOf(order: Order, fixableGaps: boolean) {
@@ -723,6 +716,6 @@ export function getReviewPanel(orderId: string, viewerRole: UserRole, source?: O
     coverage,
     documentNotes: documentNotes(facts),
     documents: documentsFor(order, facts),
-    activity: activityFor(order, evaluated, receivedAt),
+    activity: activityFor(order),
   };
 }

@@ -3,11 +3,23 @@
 
 import kirk from "@fixtures/case-1-kirk/expected.json";
 import { DEMO_NOW } from "@/data/orders";
+import {
+  CHEKOV_DOCUMENTS,
+  KIRK_DOCUMENTS,
+  SCOTT_FAX,
+  SULU_DOCUMENTS,
+  UHURA_DOCUMENTS,
+  legacyDocument,
+  scottPtDocument,
+  type CaseDocument,
+} from "@/domain/documents";
 import { PACKETS } from "@/domain/packetCases";
 import type { Order } from "@/domain/types";
 import { eligibilityFor } from "@/lib/mocks/eligibility";
 import { PLAN_TYPE_LABEL, RULE_LINE, label } from "@/lib/labels";
 import { fmtDob, fmtTableDate } from "@/lib/format";
+
+export type { CaseDocument };
 
 export interface Cite {
   docId: string;
@@ -56,14 +68,6 @@ export interface CheckRow {
   ranAt: string;
 }
 
-export interface CaseDocument {
-  id: string;
-  title: string;
-  /** Key into the packet URL map. The policy PDF is never a case input. */
-  file: string;
-  initialPage: number;
-}
-
 export interface CaseRecord {
   order: Order;
   docId: string;
@@ -82,7 +86,16 @@ export interface CaseRecord {
   documents: CaseDocument[];
 }
 
-const packet = (page: number, quote: string): Cite => ({ docId: "packet", page, quote });
+const kirkCite = (id: string, quote: string): Cite => ({ docId: id, page: 1, quote });
+/** Scott citations were stored as PDF pages. The fax document numbers the missing page too. */
+const SCOTT_DOC_PAGE = [1, 2, 3, 5, 6];
+const scottCite = (pdfPage: number, quote: string): Cite => ({
+  docId: "scott-fax",
+  page: SCOTT_DOC_PAGE[pdfPage - 1] ?? pdfPage,
+  quote,
+});
+const suluOrder = (quote: string): Cite => ({ docId: "sulu-order", page: 1, quote });
+const suluNote = (quote: string): Cite => ({ docId: "sulu-note", page: 1, quote });
 
 function policyPage(policyRef: string | null): { title: string; page: number } | null {
   if (!policyRef) return null;
@@ -182,11 +195,11 @@ function kirkRecord(order: Order): CaseRecord {
   const scan = fmtTableDate(new Date(order.scheduledAt!));
 
   const elements: CaseElement[] = [
-    { label: "Patient", value: "James T. Kirk", cite: packet(1, "KIRK, JAMES T") },
+    { label: "Patient", value: "James T. Kirk", cite: kirkCite("kirk-order", "KIRK, JAMES T") },
     {
       label: "DOB and MRN",
       value: `${fmtDob(order.patient!.dob)} · ${order.patient!.mrn}`,
-      cite: packet(1, "MRN HH-0017011 · DOB 03/22/1981"),
+      cite: kirkCite("kirk-order", "MRN HH-0017011 · DOB 03/22/1981"),
       mono: true,
     },
     {
@@ -198,35 +211,35 @@ function kirkRecord(order: Order): CaseRecord {
     {
       label: "Exam",
       value: "MRI lumbar spine · 72148",
-      cite: packet(1, "MRI LUMBAR SPINE WO CONTRAST [72148]"),
+      cite: kirkCite("kirk-order", "MRI LUMBAR SPINE WO CONTRAST [72148]"),
     },
     {
       label: "Scan slot",
       value: `${scan} · Enterprise Campus MRI 2`,
-      cite: packet(1, "11/18/2026 2:30 PM, Enterprise Campus MRI 2"),
+      cite: kirkCite("kirk-order", "11/18/2026 2:30 PM, Enterprise Campus MRI 2"),
     },
     {
       label: "Ordering provider",
       value: "Leonard McCoy, MD · 1700000017",
-      cite: packet(1, "Leonard McCoy, MD (NPI 1700000017)"),
+      cite: kirkCite("kirk-order", "Leonard McCoy, MD (NPI 1700000017)"),
     },
     { label: "Policy", value: "RAD-114 v3" },
   ];
 
   const extracted: ExtractRow[] = [
-    { section: "Office note", label: "Complaint", excerpt: "Low back pain radiating down R leg x 8 weeks.", cite: packet(1, "Low back pain radiating down R leg x 8 weeks.") },
-    { section: "Office note", label: "Onset", excerpt: "Began ~09/14/2026 after lifting.", cite: packet(1, "low back pain that began ~09/14/2026") },
-    { section: "Office note", label: "Therapy", excerpt: "12 visits, 9/21 to 10/31, minimal relief.", cite: packet(1, "Completed 6 weeks of physical therapy at Starbase Physical Therapy (12 visits, 9/21 to 10/31)") },
-    { section: "Office note", label: "Naproxen", excerpt: "500 mg BID x 4 weeks, stopped 10/26.", cite: packet(1, "Took naproxen 500 mg BID x 4 weeks with partial relief, stopped 10/26") },
-    { section: "Office note", label: "Red flags", excerpt: "Denies bowel, bladder, saddle, fever, cancer.", cite: packet(1, "Denies bowel or bladder changes, saddle numbness, fever, chills, night sweats or weight loss. No history of cancer.") },
-    { section: "Office note", label: "Strength", excerpt: "5/5 both legs.", cite: packet(1, "Strength 5/5 bilateral lower extremities") },
-    { section: "Med list", label: "Naproxen", excerpt: "09/28/2026 to 10/26/2026, stopped, GI upset.", cite: packet(2, "Naproxen 500 mg tab") },
-    { section: "Imaging history", label: "Prior MRI", excerpt: "No MRI of the lumbar spine on record.", cite: packet(2, "No MRI of the lumbar spine on record.") },
-    { section: "Radiology report", label: "X-ray", excerpt: "XR lumbar spine, 10/02/2026.", cite: packet(2, "XR LUMBAR SPINE 2-3 VIEWS, 10/02/2026 9:14 AM") },
-    { section: "Radiology report", label: "Impression", excerpt: "Mild degenerative disc disease at L5-S1.", cite: packet(2, "Mild degenerative disc disease at L5-S1.") },
-    { section: "PT note", label: "Dates", excerpt: "9/21/2026 to 10/31/2026.", cite: packet(3, "9/21/2026 to 10/31/2026") },
-    { section: "PT note", label: "Visits", excerpt: "12 attended, 0 missed.", cite: packet(3, "12 attended, 0 missed") },
-    { section: "PT note", label: "Response", excerpt: "Oswestry 44% to 40%.", cite: packet(3, "Oswestry Disability Index 44% at intake, 40% at discharge.") },
+    { section: "Office note", label: "Complaint", excerpt: "Low back pain radiating down R leg x 8 weeks.", cite: kirkCite("kirk-note", "Low back pain radiating down R leg x 8 weeks.") },
+    { section: "Office note", label: "Onset", excerpt: "Began ~09/14/2026 after lifting.", cite: kirkCite("kirk-note", "low back pain that began ~09/14/2026") },
+    { section: "Office note", label: "Therapy", excerpt: "12 visits, 9/21 to 10/31, minimal relief.", cite: kirkCite("kirk-note", "Completed 6 weeks of physical therapy at Starbase Physical Therapy (12 visits, 9/21 to 10/31)") },
+    { section: "Office note", label: "Naproxen", excerpt: "500 mg BID x 4 weeks, stopped 10/26.", cite: kirkCite("kirk-note", "Took naproxen 500 mg BID x 4 weeks with partial relief, stopped 10/26") },
+    { section: "Office note", label: "Red flags", excerpt: "Denies bowel, bladder, saddle, fever, cancer.", cite: kirkCite("kirk-note", "Denies bowel or bladder changes, saddle numbness, fever, chills, night sweats or weight loss. No history of cancer.") },
+    { section: "Office note", label: "Strength", excerpt: "5/5 both legs.", cite: kirkCite("kirk-note", "Strength 5/5 bilateral lower extremities") },
+    { section: "Med list", label: "Naproxen", excerpt: "09/28/2026 to 10/26/2026, stopped, GI upset.", cite: kirkCite("kirk-lists", "Naproxen 500 mg tab") },
+    { section: "Imaging history", label: "Prior MRI", excerpt: "No MRI of the lumbar spine on record.", cite: kirkCite("kirk-lists", "No MRI of the lumbar spine on record.") },
+    { section: "Radiology report", label: "X-ray", excerpt: "XR lumbar spine, 10/02/2026.", cite: kirkCite("kirk-rad", "XR LUMBAR SPINE 2-3 VIEWS, 10/02/2026 9:14 AM") },
+    { section: "Radiology report", label: "Impression", excerpt: "Mild degenerative disc disease at L5-S1.", cite: kirkCite("kirk-rad", "Mild degenerative disc disease at L5-S1.") },
+    { section: "PT note", label: "Dates", excerpt: "9/21/2026 to 10/31/2026.", cite: kirkCite("kirk-pt", "9/21/2026 to 10/31/2026") },
+    { section: "PT note", label: "Visits", excerpt: "12 attended, 0 missed.", cite: kirkCite("kirk-pt", "12 attended, 0 missed") },
+    { section: "PT note", label: "Response", excerpt: "Oswestry 44% to 40%.", cite: kirkCite("kirk-pt", "Oswestry Disability Index 44% at intake, 40% at discharge.") },
   ];
 
   const shortFact: Record<string, string> = {
@@ -242,14 +255,14 @@ function kirkRecord(order: Order): CaseRecord {
     status: "met" as const,
     fact: shortFact[c.id] ?? c.label,
     detail: c.proof,
-    cites: c.citations.map((cite) => packet(cite.page, cite.quote)),
+    cites: c.citations.map((cite) => kirkCriterionCite(cite.page, cite.quote)),
   }));
 
   return {
     order,
     docId: order.orderNumber ?? kirk.order.orderNumber,
     summary: "Lumbar MRI for radiculopathy, routine. Sent to Federation Health: 8 weeks of pain and documented care meet the policy.",
-    summaryCites: [packet(1, "Low back pain radiating down R leg x 8 weeks."), packet(3, "Dates of care: 9/21/2026 to 10/31/2026")],
+    summaryCites: [kirkCite("kirk-note", "Low back pain radiating down R leg x 8 weeks."), kirkCite("kirk-pt", "Dates of care: 9/21/2026 to 10/31/2026")],
     primaryLabel: primaryLabelFor(order),
     elements,
     flags: [],
@@ -266,13 +279,22 @@ function kirkRecord(order: Order): CaseRecord {
         ranAt: DEMO_NOW.toISOString(),
       },
     ],
-    documents: [{ id: "packet", title: "EHR print", file: "kirk", initialPage: 1 }],
+    documents: KIRK_DOCUMENTS,
   };
 }
 
+function kirkCriterionCite(page: number, quote: string): Cite {
+  if (page === 3) return kirkCite("kirk-pt", quote);
+  if (page === 1) return kirkCite("kirk-note", quote);
+  if (/naproxen|no mri/i.test(quote)) return kirkCite("kirk-lists", quote);
+  return kirkCite("kirk-rad", quote);
+}
+
 function scottRecord(order: Order): CaseRecord {
+  const packet = scottCite;
   const scanNote = "notes should come over by fax";
-  return {
+  const attached = order.faxAttached === true;
+  const record: CaseRecord = {
     order,
     docId: order.orderNumber!,
     summary: "Right knee MRI, routine. PT notes are missing, and the six weeks of therapy is only the patient's report.",
@@ -355,11 +377,40 @@ function scottRecord(order: Order): CaseRecord {
     policyHref: "/settings",
     missing: ["PT notes from Utopia Planitia", "Imaging history"],
     checks: [],
-    documents: [{ id: "packet", title: "Fax", file: "scott", initialPage: 1 }],
+    documents: attached ? [SCOTT_FAX, scottPtDocument(order.statusSince)] : [SCOTT_FAX],
   };
+  if (!attached) return record;
+  const pt = (quote: string): Cite => ({ docId: "scott-pt", page: 1, quote });
+  record.criteria = record.criteria.map((row) => {
+    if (row.id === "2") {
+      return {
+        ...row,
+        status: "met",
+        fact: "39 days of documented PT",
+        detail: "Utopia Planitia notes cover 9/29 to 11/6, 10 visits. Pain improved 5 to 4/10 and is still catching.",
+        cites: [pt("09/29/2026 to 11/06/2026"), pt("pain improved 5 to 4/10, still catching")],
+      };
+    }
+    if (row.id === "4") {
+      return {
+        ...row,
+        status: "met",
+        fact: "None on record",
+        detail: "Epic imaging history lists no knee MRI in the past year.",
+        cites: [],
+      };
+    }
+    return row;
+  });
+  record.missing = [];
+  record.flags = [];
+  record.summary = "Right knee MRI, routine. Ten PT visits over 39 days are documented, and Epic has no prior knee MRI.";
+  return record;
 }
 
 function suluRecord(order: Order): CaseRecord {
+  const packet = (_page: number, quote: string): Cite =>
+    /SULU, HIKARU|DOB 09\/14\/1984|AL-1701|MRI SHOULDER RIGHT WO|Scheduled 11\/16|McCoy, Leonard/.test(quote) ? suluOrder(quote) : suluNote(quote);
   const eligibility = eligibilityFor(order.patient?.mrn);
   return {
     order,
@@ -440,7 +491,7 @@ function suluRecord(order: Order): CaseRecord {
         ranAt: DEMO_NOW.toISOString(),
       },
     ],
-    documents: [{ id: "packet", title: "Order", file: "sulu", initialPage: 1 }],
+    documents: SULU_DOCUMENTS,
   };
 }
 
@@ -448,23 +499,66 @@ export function buildCaseRecord(order: Order): CaseRecord {
   if (order.id === "case-1-kirk") return kirkRecord(order);
   if (order.id === "case-2-scott") return scottRecord(order);
   if (order.id === "case-3-sulu") return suluRecord(order);
-  const packet = PACKETS[order.id];
-  if (!packet) return demoRecord(order);
+  if (order.id === "case-26-uhura") return letterRecord(order, UHURA_DOCUMENTS);
+  if (order.id === "case-27-chekov") return letterRecord(order, CHEKOV_DOCUMENTS);
+  const packetCase = PACKETS[order.id];
+  if (!packetCase) return demoRecord(order);
   return {
     order,
     docId: order.orderNumber ?? order.patient?.name ?? "Unmatched",
-    summary: packet.summary,
-    summaryCites: packet.summaryCites,
+    summary: packetCase.summary,
+    summaryCites: packetCase.summaryCites,
     primaryLabel: primaryLabelFor(order),
-    elements: packet.elements,
-    flags: packet.flags,
-    extracted: packet.extracted,
-    criteria: packet.criteria,
-    policyLabel: packet.policyLabel,
-    policyHref: packet.policyHref,
-    missing: packet.missing,
+    elements: packetCase.elements,
+    flags: packetCase.flags,
+    extracted: packetCase.extracted,
+    criteria: packetCase.criteria,
+    policyLabel: packetCase.policyLabel,
+    policyHref: packetCase.policyHref,
+    missing: packetCase.missing,
     checks: [],
-    documents: [{ id: "packet", title: packet.title, file: packet.file, initialPage: 1 }],
+    documents: [
+      legacyDocument(
+        order.id,
+        packetCase.file,
+        packetCase.title,
+        packetCase.extracted.map((row) => ({ section: row.section, page: row.cite.page })),
+      ),
+    ],
+  };
+}
+
+function letterRecord(order: Order, documents: CaseDocument[]): CaseRecord {
+  const base = demoRecord(order);
+  const first = documents[0];
+  if (order.id === "case-26-uhura" && first) {
+    return {
+      ...base,
+      summary: "Federation Health denied the lumbar MRI under section 2b. The appeal attaches the missing PT notes and is signed.",
+      summaryCites: [
+        { docId: "uhura-denial", page: 1, quote: "denied under RAD-114 section 2b" },
+        { docId: "uhura-appeal", page: 1, quote: "PT documentation was missing" },
+      ],
+      documents,
+      extracted: [
+        { section: "Denial", label: "Section 2b", excerpt: "Denied under section 2b. PT notes were not included.", cite: { docId: "uhura-denial", page: 1, quote: "denied under RAD-114 section 2b" } },
+        { section: "Appeal", label: "Attached PT", excerpt: "The discharge is attached. Nurse and doctor signed.", cite: { docId: "uhura-appeal", page: 1, quote: "Christine Chapel, RN" } },
+      ],
+    };
+  }
+  return {
+    ...base,
+    summary: "Andorian Life rejected the upload because the file was over 10MB. Compress it under 10MB and resubmit.",
+    summaryCites: [{ docId: "chekov-error", page: 1, quote: "upload failed: file > 10MB" }],
+    documents,
+    extracted: [
+      {
+        section: "Error",
+        label: "Upload",
+        excerpt: "File over 10MB. Compress the packet and resubmit.",
+        cite: { docId: "chekov-error", page: 1, quote: "upload failed: file > 10MB" },
+      },
+    ],
   };
 }
 

@@ -130,7 +130,7 @@ describe("review panel interactions", () => {
         </MemoryRouter>,
       );
     });
-    const chip = [...host.querySelectorAll("button")].find((button) => button.textContent === "fax p.3");
+    const chip = [...host.querySelectorAll("button")].find((button) => button.textContent === "Fax · p.3");
     expect(chip).toBeTruthy();
     act(() => chip!.click());
     expect(host.textContent).toContain("3 of");

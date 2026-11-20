@@ -11,6 +11,8 @@ export interface NormBox {
 }
 
 export interface PageSlot {
+  /** Page inside the open document. Absent on the policy PDF. */
+  docPage?: number;
   faxPage: number | null;
   pdfPage: number | null;
   missing?: { detail: string; declared: number };
@@ -145,6 +147,10 @@ export function slotForTarget(
   slots: PageSlot[],
   target: { page?: number; faxPage?: number } | null,
 ): number {
+  if (target?.page && slots.some((slot) => slot.docPage != null)) {
+    const byDoc = slots.findIndex((slot) => slot.docPage === target.page);
+    if (byDoc >= 0) return byDoc;
+  }
   if (target?.faxPage != null) {
     const byFax = slots.findIndex((slot) => slot.faxPage === target.faxPage);
     if (byFax >= 0) return byFax;

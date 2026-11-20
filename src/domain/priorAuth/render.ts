@@ -7,6 +7,7 @@ import type { OrderSnapshot, OrderStatus, PillTone, ProcessingStep, ReasonCode, 
 export function actionStatusLabel(reason: ReasonCode | null): string | null {
   if (reason === "MISSING_DOCUMENTS") return "Chase records";
   if (reason === "RETURN_TO_PROVIDER") return "Return to provider";
+  if (reason === "SUBMISSION_FAILED") return "Resubmit";
   return null;
 }
 

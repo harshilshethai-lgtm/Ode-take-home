@@ -36,9 +36,9 @@ describe("operations snapshot", () => {
 
   it("counts the open worklist by owner", () => {
     const open = SEED_ORDERS.filter((order) => !isClosed(order.status));
-    expect(open).toHaveLength(22);
+    expect(open).toHaveLength(24);
     const counts = Object.fromEntries(model.queue.map((row) => [row.id, row.count]));
-    expect(counts).toEqual({ ai: 2, coordinator: 11, nurse: 4, insurer: 5 });
+    expect(counts).toEqual({ ai: 2, coordinator: 12, nurse: 4, insurer: 6 });
     for (const order of open) {
       const owner = queueOwner(order.status, autonomyFor(order.insurer, order.channel));
       expect(owner).not.toBe("done");
@@ -51,6 +51,7 @@ describe("operations snapshot", () => {
       { label: "Wrong-patient page", count: 1 },
       { label: "Insurer mismatch", count: 1 },
       { label: "Ready · portal submit (manual)", count: 3 },
+      { label: "Submission failed", count: 1 },
     ]);
     expect(model.queue.find((row) => row.id === "nurse")?.reasons).toEqual([
       { label: "Criteria not met", count: 3 },
@@ -138,7 +139,7 @@ describe("operations snapshot", () => {
     expect(ferengi?.autonomy).toBe("assisted");
     expect(ferengi?.aiReadyDenial).toBeGreaterThan(ferengi?.matchedBaseline ?? 1);
     expect(model.byInsurer[0]?.insurer).toBe("Federation Health");
-    expect(model.byInsurer.find((row) => row.insurer === "Federation Health")?.open).toBe(3);
+    expect(model.byInsurer.find((row) => row.insurer === "Federation Health")?.open).toBe(4);
     expect(model.byInsurer.find((row) => row.insurer === "Vulcan Science Mutual")?.open).toBe(1);
     expect(model.byInsurer.find((row) => row.insurer === "Klingon Assurance")?.open).toBe(1);
   });

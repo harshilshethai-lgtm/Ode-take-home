@@ -1,6 +1,7 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { SEED_ORDERS } from "@/data/orders";
 import { restoreDemoRules } from "@/data/rules";
+import { PIPELINE_TIMEOUT_MS, planInboundFax, type InboundPatch } from "@/domain/inboundFax";
 import type { StatusId } from "@/domain/statuses";
 import type { Order } from "@/domain/types";
 
@@ -16,7 +17,7 @@ function load(): Assignments {
   }
 }
 
-export interface StatusPatch {
+export interface StatusPatch extends Partial<InboundPatch> {
   status: StatusId;
   reason: string;
   statusSince: string;
@@ -28,6 +29,7 @@ interface OrdersCtx {
   orders: Order[];
   assign: (ids: string[], personId: string | null) => void;
   applyStatus: (id: string, patch: StatusPatch) => void;
+  startInboundFax: (orderId: string) => void;
   reset: () => void;
 }
 
@@ -37,6 +39,13 @@ const Ctx = createContext<OrdersCtx | null>(null);
 export function OrdersProvider({ children }: { children: ReactNode }) {
   const [assignments, setAssignments] = useState<Assignments>(load);
   const [patches, setPatches] = useState<Record<string, StatusPatch>>({});
+  const timers = useRef<number[]>([]);
+  const ordersRef = useRef<Order[]>([]);
+
+  const clearTimers = useCallback(() => {
+    for (const handle of timers.current) window.clearTimeout(handle);
+    timers.current = [];
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(KEY, JSON.stringify(assignments));
@@ -51,6 +60,7 @@ export function OrdersProvider({ children }: { children: ReactNode }) {
       })),
     [assignments, patches],
   );
+  ordersRef.current = orders;
 
   const assign = useCallback((ids: string[], personId: string | null) => {
     setAssignments((prev) => {
@@ -64,13 +74,35 @@ export function OrdersProvider({ children }: { children: ReactNode }) {
     setPatches((prev) => ({ ...prev, [id]: patch }));
   }, []);
 
+  const startInboundFax = useCallback(
+    (orderId: string) => {
+      const order = ordersRef.current.find((item) => item.id === orderId);
+      if (!order) return;
+      clearTimers();
+      const plan = planInboundFax(order);
+      let elapsed = 0;
+      for (const step of plan.steps) {
+        elapsed += step.delayMs;
+        timers.current.push(window.setTimeout(() => applyStatus(orderId, step.patch), elapsed));
+      }
+      if (!plan.completes) {
+        timers.current.push(window.setTimeout(() => applyStatus(orderId, plan.timeout), elapsed + PIPELINE_TIMEOUT_MS));
+      }
+    },
+    [applyStatus, clearTimers],
+  );
+
   const reset = useCallback(() => {
+    clearTimers();
     setAssignments({});
     setPatches({});
     restoreDemoRules();
-  }, []);
+  }, [clearTimers]);
 
-  const value = useMemo(() => ({ orders, assign, applyStatus, reset }), [orders, assign, applyStatus, reset]);
+  const value = useMemo(
+    () => ({ orders, assign, applyStatus, startInboundFax, reset }),
+    [orders, assign, applyStatus, startInboundFax, reset],
+  );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

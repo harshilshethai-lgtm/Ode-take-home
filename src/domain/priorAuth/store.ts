@@ -173,7 +173,7 @@ export function transitionOrder(state: AuthState, orderId: string, to: OrderStat
   if (order.statusVersion !== ctx.expectedVersion) {
     throw new StaleVersionError(ctx.expectedVersion, order.statusVersion);
   }
-  if (!isLegalOrderTransition(order.status, to)) {
+  if (order.status === to || !isLegalOrderTransition(order.status, to)) {
     throw new IllegalTransitionError(order.status, to);
   }
   if (!reasonFits(to, ctx.reason)) {
@@ -239,7 +239,6 @@ export function applyReason(state: AuthState, orderId: string, ctx: TransitionCo
     throw new TransitionDeniedError(`Reason ${ctx.reason ?? "none"} is not valid for ${order.status}`);
   }
   assertReasonActor(order, ctx);
-  const at = (ctx.now ?? new Date()).toISOString();
   const detail = { ...(ctx.detail ?? {}) };
   order.statusVersion += 1;
   order.reason = ctx.reason;
@@ -247,47 +246,16 @@ export function applyReason(state: AuthState, orderId: string, ctx: TransitionCo
   order.otherIssues = (ctx.otherIssues ?? order.otherIssues).map(copyIssue);
   order.confirmOnly = ctx.reason === "CONFIRM_AFTER_FIX";
   order.blockingChecks = [...(ctx.checkIds ?? checksFor(ctx.reason))];
-  writeAudit(state, {
-    orderId: order.id,
-    documentId: null,
-    fromStatus: order.status,
-    toStatus: order.status,
-    actor: actorId(ctx.actor),
-    at,
-    reason: sentenceFor(order.status, ctx.reason, null, detail),
-    reasonCode: ctx.reason,
-    step: null,
-    checkIds: [...(ctx.checkIds ?? [])],
-    criterionResults: null,
-    evidenceRefs: [],
-    ruleVersion: null,
-    routingPolicyVersion: null,
-  });
+  // A reason update stays on the same status, so it is not a transition and writes no activity event.
   recordOrderEffects(state, order, ctx, sentenceFor(order.status, ctx.reason, null, detail));
   return copyOrder(order);
 }
 
 /** Epic reported the scan. APPROVED can no longer return to the pipeline. */
-export function markScanCompleted(state: AuthState, orderId: string, now?: Date): OrderSnapshot {
+export function markScanCompleted(state: AuthState, orderId: string, _now?: Date): OrderSnapshot {
   const order = mustOrder(state, orderId);
   order.scanCompleted = true;
   order.statusVersion += 1;
-  writeAudit(state, {
-    orderId: order.id,
-    documentId: null,
-    fromStatus: order.status,
-    toStatus: order.status,
-    actor: "system",
-    at: (now ?? new Date()).toISOString(),
-    reason: "Scan completed",
-    reasonCode: order.reason,
-    step: null,
-    checkIds: [],
-    criterionResults: null,
-    evidenceRefs: [],
-    ruleVersion: null,
-    routingPolicyVersion: null,
-  });
   return copyOrder(order);
 }
 
@@ -297,25 +265,8 @@ export function advanceProcessingStep(state: AuthState, orderId: string, step: P
   if (order.status !== "PROCESSING") {
     throw new IllegalTransitionError(order.status, "PROCESSING");
   }
-  const at = (ctx.now ?? new Date()).toISOString();
   order.step = step;
   order.detail = { ...order.detail, ...(ctx.detail ?? {}) };
-  writeAudit(state, {
-    orderId: order.id,
-    documentId: null,
-    fromStatus: "PROCESSING",
-    toStatus: "PROCESSING",
-    actor: actorId(ctx.actor),
-    at,
-    reason: stepProgress(step, order.detail),
-    reasonCode: null,
-    step,
-    checkIds: [],
-    criterionResults: null,
-    evidenceRefs: [],
-    ruleVersion: null,
-    routingPolicyVersion: null,
-  });
   return copyOrder(order);
 }
 

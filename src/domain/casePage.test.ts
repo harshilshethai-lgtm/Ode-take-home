@@ -22,7 +22,7 @@ describe("case page presentation", () => {
     const criteria = view.groups.find((group) => group.title === "Insurer criteria");
     expect(criteria?.items[0]).toMatchObject({ kind: "waiting", count: 4 });
     const fields = orderFields(item, buildCaseRecord(item), panel);
-    expect(fields.find((field) => field.label === "Insurance on order")?.value).toBe("Federation Health");
+    expect(fields.find((field) => field.label === "Insurance")?.value).toBe("Federation Health · Starfleet PPO");
     expect(fields.find((field) => field.label === "Insurance on card")?.value).toBe("Bajoran Health Plan");
     expect(fields.find((field) => field.label === "Policy")).toMatchObject({ value: "Pending coverage check", muted: true });
     const docs = documentRows(buildCaseRecord(item), panel);

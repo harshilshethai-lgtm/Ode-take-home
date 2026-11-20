@@ -2,6 +2,14 @@ import type { FindingFlag } from "./flags";
 import type { ProcessingStep, ReasonCode, ReasonDetail, OtherIssue } from "./priorAuth/types";
 import type { Channel, OwnerRole, StatusId } from "./statuses";
 
+export interface ActivityEntry {
+  at: string;
+  actor: string;
+  from: string;
+  to: string;
+  reason: string;
+}
+
 export interface Person {
   id: string;
   name: string;
@@ -65,4 +73,12 @@ export interface Order {
   scheduleHandwritten?: boolean;
   /** Ferengi-style payers will not accept an incomplete packet. Submit stays off. */
   submissionBlocked?: boolean;
+  /** Scott's simulated second fax has been attached. */
+  faxAttached?: boolean;
+  /** Steps from a live pipeline run. Newest first. */
+  pipelineActivity?: ActivityEntry[];
+  /** Replaces the status pill label after a pipeline finishes. */
+  statusLabel?: string | null;
+  /** Replaces the reason sentence while a pipeline is still talking. */
+  reasonText?: string | null;
 }

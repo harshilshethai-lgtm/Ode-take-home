@@ -21,6 +21,7 @@ export function InsurerBlock({
   onCloseDenied,
   onPeer,
   onRecordOutcome,
+  embedded = false,
 }: {
   panel: InsurerPanelModel;
   onCheckNow?: () => void;
@@ -28,6 +29,8 @@ export function InsurerBlock({
   onCloseDenied?: () => void;
   onPeer?: () => void;
   onRecordOutcome?: (outcome: "approved" | "denied") => void;
+  /** Sits inside the packet card instead of its own card. */
+  embedded?: boolean;
 }) {
   const [letter, setLetter] = useState(panel.appeal?.draft ?? "");
   const [copied, setCopied] = useState(false);
@@ -96,11 +99,13 @@ export function InsurerBlock({
   }
 
   return (
-    <section data-review="Insurer" className="rounded-block border border-line-strong bg-panel px-6 py-5">
-      <div className="mb-4 flex items-baseline gap-2">
-        <h2 className="text-block text-fg">Insurer</h2>
-        <Chip className="ml-auto">{panel.channelLabel}</Chip>
-      </div>
+    <section data-review="Insurer" className={embedded ? "mt-4 border-t border-line pt-4" : "rounded-block border border-line-strong bg-panel px-6 py-5"}>
+      {!embedded && (
+        <div className="mb-4 flex items-baseline gap-2">
+          <h2 className="text-block text-fg">Insurer</h2>
+          <Chip className="ml-auto">{panel.channelLabel}</Chip>
+        </div>
+      )}
       <PropertyList items={fields} />
       {panel.sent.length > 0 && (
         <div className="mt-3">

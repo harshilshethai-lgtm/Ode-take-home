@@ -11,6 +11,7 @@ import { parseDemoInstant } from "@/lib/demoClock";
 import { fmtScanTight, fmtWeekdayDate } from "@/lib/format";
 import { ORDER_STATUS_INFO } from "@/domain/priorAuth/catalog";
 import { toOrderStatus } from "@/domain/priorAuth/legacy";
+import { guidanceFor } from "@/domain/guidance";
 import { buildCaseSummary, compactTrail } from "@/domain/priorAuth/summary";
 import type { OrderStatus, ProcessingStep, ReasonCode, UserRole } from "@/domain/priorAuth/types";
 import type { CaseRecord, ExtractRow } from "@/domain/caseRecord";
@@ -83,18 +84,23 @@ export function CaseSummaryCard({
   const fixBy = scanAt && !closed ? fixByAt(scanAt, order.insurer) : null;
   const scanText = scanAt ? `Scan ${scanLabel(order.scheduledAt!)}` : null;
   const deadline = fixBy ? (scanText ? `${scanText} · ${fixPhrase(fixBy)}` : fixPhrase(fixBy)) : scanText;
-  const summary = buildCaseSummary({
-    status,
-    reason: order.reasonCode,
-    step: order.step,
-    detail: order.detail,
-    otherIssues: order.otherIssues,
-    role,
-    actions: [],
-    deadline,
-    scanAtRisk: status === "SUBMITTED" && scanAt != null && (scanAt.getTime() - DEMO_NOW.getTime()) / 36e5 <= 24,
-    trail: trailFor(order),
-  });
+  const guide = guidanceFor(order);
+  const summary = {
+    ...buildCaseSummary({
+      status,
+      reason: order.reasonCode,
+      step: order.step,
+      detail: order.detail,
+      otherIssues: order.otherIssues,
+      role,
+      actions: [],
+      deadline,
+      scanAtRisk: status === "SUBMITTED" && scanAt != null && (scanAt.getTime() - DEMO_NOW.getTime()) / 36e5 <= 24,
+      trail: trailFor(order),
+    }),
+    explanation: guide.reason,
+    whatToDo: guide.nextStep,
+  };
   const owner = ownerRoleFor(order.status, order.channel);
   const viewerOwns = owner === role || (owner === "nurse" && role === "rules_admin");
   const groups = groupExtracted(record.extracted);
@@ -246,7 +252,7 @@ function ExtractField({ row, onOpen }: { row: ExtractRow; onOpen: (cite: OpenPag
       <div className="mb-1 text-caption text-fg-2">{row.label}</div>
       <div className="flex min-h-7 items-center gap-2 rounded-md border border-line px-2 py-1">
         <span className="min-w-0 flex-1 text-body text-fg">{row.excerpt}</span>
-        <CitationChip page={row.cite.page} excerpt={row.cite.quote} onOpen={() => onOpen({ docId: row.cite.docId, page: row.cite.page, quote: row.cite.quote })} />
+        <CitationChip docId={row.cite.docId} page={row.cite.page} excerpt={row.cite.quote} onOpen={() => onOpen({ docId: row.cite.docId, page: row.cite.page, quote: row.cite.quote })} />
       </div>
     </div>
   );
