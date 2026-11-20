@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { DEMO_NOW, SEED_ORDERS } from "@/data/orders";
+import { parseDemoInstant } from "@/lib/demoClock";
 import { METRICS, OPS_METRICS } from "@/data/impact/metrics";
 import { HOSPITAL, autonomyFor, queueOwner } from "@/data/operations/queue";
 import { STATUSES, isClosed } from "@/domain/statuses";
@@ -16,15 +17,15 @@ import {
 const ALL = { hospital: null, insurer: null, period: "week" as const };
 
 describe("business hours", () => {
-  it("counts only weekday hours between 8:00 and 5:00", () => {
-    const monday = new Date(2026, 10, 9, 10, 0, 0, 0);
-    expect(businessHoursBetween(monday, new Date(2026, 10, 9, 14, 0, 0, 0))).toBe(4);
-    expect(businessHoursBetween(new Date(2026, 10, 9, 16, 0, 0, 0), new Date(2026, 10, 10, 10, 0, 0, 0))).toBe(3);
-    expect(businessHoursBetween(new Date(2026, 10, 13, 16, 0, 0, 0), new Date(2026, 10, 16, 9, 0, 0, 0))).toBe(2);
+  it("counts only weekday hours between 8:00 and 5:00 Eastern", () => {
+    const monday = parseDemoInstant("2026-11-09T10:00:00");
+    expect(businessHoursBetween(monday, parseDemoInstant("2026-11-09T14:00:00"))).toBe(4);
+    expect(businessHoursBetween(parseDemoInstant("2026-11-09T16:00:00"), parseDemoInstant("2026-11-10T10:00:00"))).toBe(3);
+    expect(businessHoursBetween(parseDemoInstant("2026-11-13T16:00:00"), parseDemoInstant("2026-11-16T09:00:00"))).toBe(2);
   });
 
   it("adds business hours as the inverse", () => {
-    const start = new Date(2026, 10, 4, 10, 0, 0, 0);
+    const start = parseDemoInstant("2026-11-04T10:00:00");
     const end = addBusinessHours(start, 14);
     expect(businessHoursBetween(start, end)).toBeCloseTo(14, 5);
   });
@@ -35,39 +36,45 @@ describe("operations snapshot", () => {
 
   it("counts the open worklist by owner", () => {
     const open = SEED_ORDERS.filter((order) => !isClosed(order.status));
-    expect(open).toHaveLength(20);
+    expect(open).toHaveLength(22);
     const counts = Object.fromEntries(model.queue.map((row) => [row.id, row.count]));
-    expect(counts).toEqual({ ai: 0, coordinator: 10, nurse: 5, insurer: 5 });
+    expect(counts).toEqual({ ai: 2, coordinator: 11, nurse: 4, insurer: 5 });
     for (const order of open) {
       const owner = queueOwner(order.status, autonomyFor(order.insurer, order.channel));
       expect(owner).not.toBe("done");
     }
     expect(model.queue.find((row) => row.id === "coordinator")?.reasons).toEqual([
       { label: "Missing docs", count: 2 },
+      { label: "Under 6 weeks", count: 1 },
       { label: "Unreadable", count: 2 },
       { label: "Side mismatch", count: 1 },
       { label: "Wrong-patient page", count: 1 },
       { label: "Insurer mismatch", count: 1 },
-      { label: "Portal upload", count: 3 },
+      { label: "Ready · portal submit (manual)", count: 3 },
     ]);
     expect(model.queue.find((row) => row.id === "nurse")?.reasons).toEqual([
-      { label: "Criteria not met", count: 4 },
+      { label: "Criteria not met", count: 3 },
       { label: "Rule gap", count: 1 },
     ]);
-    expect(model.doneToday).toEqual([
-      { label: "approved", count: 1 },
-      { label: "not required", count: 2 },
-    ]);
+    expect(model.doneToday).toEqual([]);
   });
 
   it("puts slots at risk ahead of past-due cases, then earliest due", () => {
     expect(model.attention.map((row) => row.orderId)).toEqual([
+      "case-2-scott",
       "case-13-laforge",
+      "case-12-crusher",
       "case-18-sisko",
       "case-19-kira",
       "case-17-obrien",
+      "case-15-nog",
+      "case-10-riker",
+      "case-20-odo",
+      "case-8-paris",
     ]);
-    expect(model.attention.every((row) => row.pastDue && !row.slotAtRisk)).toBe(true);
+    expect(model.attention[0]?.slotAtRisk).toBe(true);
+    expect(model.attention.slice(1).every((row) => row.pastDue && !row.slotAtRisk)).toBe(true);
+    expect(model.attention.find((row) => row.pastDue)?.dueText.startsWith("Past due by ")).toBe(true);
 
     const soon: Order = {
       ...SEED_ORDERS[0],
@@ -77,8 +84,11 @@ describe("operations snapshot", () => {
       status: "submitted",
     };
     const rows = attentionItems([soon, ...SEED_ORDERS], ALL);
-    expect(rows[0]?.orderId).toBe("slot-soon");
-    expect(rows[0]?.slotAtRisk).toBe(true);
+    const soonRow = rows.find((row) => row.orderId === "slot-soon");
+    const firstQuiet = rows.findIndex((row) => !row.slotAtRisk);
+    expect(rows.findIndex((row) => row.orderId === "slot-soon")).toBeLessThan(firstQuiet);
+    expect(soonRow?.dueText.startsWith("in ")).toBe(true);
+    expect(soonRow?.slotAtRisk).toBe(true);
     expect(isSlotAtRisk(soon)).toBe(true);
     expect(isPastDue(soon)).toBe(false);
   });
@@ -94,12 +104,12 @@ describe("operations snapshot", () => {
     const noNurse = model.tiles[0];
     expect(noNurse.metric).toBe(OPS_METRICS.no_nurse_submit);
     expect(noNurse.metric.target).toBe(0.5);
-    expect(noNurse.value).toBeCloseTo(38 / 80, 5);
+    expect(noNurse.value).toBeCloseTo(35 / 76, 5);
     expect(noNurse.series[7]).toBe(noNurse.value);
     expect(trackTone("higher", noNurse.value!, noNurse.metric.target!)).toBe("hold");
 
     const hours = model.tiles[1];
-    expect(hours.value).toBe(7);
+    expect(hours.value).toBe(6.5);
     expect(trackTone("lower", hours.value!, hours.metric.target!)).toBe("ready");
 
     const intake = model.tiles[2];
@@ -109,7 +119,7 @@ describe("operations snapshot", () => {
     const spot = model.tiles[3];
     expect(spot.metric).toBe(METRICS.spot_check);
     expect(spot.metric.target).toBe(0.95);
-    expect(spot.value).toBeCloseTo(19 / 20, 5);
+    expect(spot.value).toBeCloseTo(15 / 16, 5);
 
     const overturned = model.tiles[4];
     expect(overturned.metric.target).toBe(0.01);

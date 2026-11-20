@@ -110,8 +110,8 @@ export function unfilledPlaceholders(text: string): string[] {
 
 export function deadlineLine(scanLabel: string | null, fixByLabel: string | null): string | null {
   if (!scanLabel && !fixByLabel) return null;
-  if (scanLabel && fixByLabel) return `Scan ${scanLabel} · fix by ${fixByLabel}`;
-  return scanLabel ? `Scan ${scanLabel}` : `Fix by ${fixByLabel}`;
+  if (scanLabel && fixByLabel) return `Scan ${scanLabel} · submit by ${fixByLabel}`;
+  return scanLabel ? `Scan ${scanLabel}` : `Submit by ${fixByLabel}`;
 }
 
 export function compactTrail(steps: SummaryTrailStep[], expanded: boolean): string {

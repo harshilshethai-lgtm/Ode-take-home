@@ -62,13 +62,14 @@ const met = (id: string, label: string): CriterionResult => ({
 const waived = (id: string, label: string): CriterionResult => ({ ...met(id, label), result: "WAIVED" });
 const exceptionMet = (id: string, label: string): CriterionResult => ({ ...met(id, label), result: "EXCEPTION_MET" });
 
-const clinical = (id: string, label: string, quote: string): CriterionResult => ({
+const clinical = (id: string, label: string, quote: string, extra: Partial<CriterionResult> = {}): CriterionResult => ({
   criterionId: id,
   label,
   result: "NOT_MET",
   failureClass: "clinical",
   confidence: 0.95,
   evidence: { documentId: "packet", page: 1, quote },
+  ...extra,
 });
 
 const unclear = (id: string, label: string): CriterionResult => ({
@@ -83,7 +84,7 @@ const unclear = (id: string, label: string): CriterionResult => ({
 const EXPECTED: Record<number, { status: OrderStatus; reason: ReasonCode | null; urgent?: boolean }> = {
   1: { status: "SUBMITTED", reason: "INITIAL_REQUEST" },
   2: { status: "NEEDS_ADMIN_REVIEW", reason: "MISSING_DOCUMENTS" },
-  3: { status: "NEEDS_CLINICAL_REVIEW", reason: "CRITERIA_NOT_MET" },
+  3: { status: "NEEDS_ADMIN_REVIEW", reason: "RETURN_TO_PROVIDER" },
   4: { status: "SUBMITTED", reason: "INITIAL_REQUEST", urgent: true },
   5: { status: "NEEDS_ADMIN_REVIEW", reason: "PORTAL_UPLOAD" },
   6: { status: "NEEDS_CLINICAL_REVIEW", reason: "CRITERIA_NOT_MET" },
@@ -157,10 +158,10 @@ export const CASE_FIXTURES: CaseFixture[] = [
     cpt: "73221",
     approval: { required: true, hasCriteria: true, policyId: "IMG-330" },
     evaluating: ready([
-      clinical("1", "Symptom duration", "3 weeks of symptoms (needs 6)"),
-      clinical("2", "Therapy", "1 week of PT"),
-      unclear("3", "no X-ray"),
-      unclear("4", "no waiver"),
+      clinical("1", "Symptom duration", "3 weeks of symptoms (needs 6)", { clinicalKind: "duration", documentCouldChange: false }),
+      clinical("2", "Therapy", "1 week of PT", { clinicalKind: "treatment_length", documentCouldChange: false }),
+      { ...unclear("3", "no X-ray"), pendingDocument: "never_performed" },
+      { ...unclear("4", "no prior MRI"), pendingDocument: "never_performed" },
     ]),
   }),
   passed({ caseNumber: 4, name: "Janeway", expected: "READY_TO_SUBMIT", evaluating: ready([waived("2a", "Urinary retention"), waived("2b", "Saddle anesthesia"), met("2d", "No prior MRI")]) }),

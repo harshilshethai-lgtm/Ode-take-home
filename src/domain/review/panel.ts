@@ -2,6 +2,7 @@
 
 import { buildSeedDb } from "@/data/rules/seed";
 import { SEED_ORDERS, DEMO_NOW } from "@/data/orders";
+import { formatFixBy, parseDemoInstant } from "@/lib/demoClock";
 import { buildCaseRecord } from "@/domain/caseRecord";
 import { actionsFor, statusLabel, type StatusAction } from "@/domain/priorAuth/actions";
 import { ownerRole } from "@/domain/priorAuth/catalog";
@@ -9,7 +10,7 @@ import { toOrderStatus } from "@/domain/priorAuth/legacy";
 import type { OrderStatus, ReasonCode, UserRole } from "@/domain/priorAuth/types";
 import { incompleteHandlingOf } from "@/domain/rules/policyProperties";
 import type { PolicyVersion } from "@/domain/rules/types";
-import { computeTimeRisk, fixByAt } from "@/domain/timeRisk";
+import { computeTimeRisk, submitByAt } from "@/domain/timeRisk";
 import type { Order } from "@/domain/types";
 import type { CheckResult, CheckRow, ReviewPanel } from "./types";
 
@@ -27,8 +28,6 @@ const CONSISTENCY: Array<{ id: string; label: string }> = [
 const NOT_A_CRITERION = new Set(["Same side throughout", "Active payer", "Approval needed", "Existing approval", "Outpatient policy"]);
 
 const RANK: Record<CheckResult, number> = { NOT_MET: 0, UNCLEAR: 1, WAIVED: 2, EXCEPTION_MET: 2, FIXED: 3, MET: 4 };
-
-const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" });
 
 type Fact = { result: CheckResult; found: string; page?: number; quote?: string };
 
@@ -51,13 +50,15 @@ interface CaseFacts {
 
 const fax = (page: number, quote: string) => ({ docId: "packet", page, quote });
 
-const OBRIEN_RECEIVED = "2026-11-11T16:02:00";
-const OBRIEN_EVALUATED = "2026-11-11T16:18:00";
+const OBRIEN_RECEIVED = "2026-11-10T10:02:00";
+const OBRIEN_EVALUATED = "2026-11-10T10:18:00";
 
 const FACTS: Record<string, CaseFacts> = {
   "case-1-kirk": {
     headline: "Meets all 4 criteria; ready to send via API",
     receivedKind: "record",
+    receivedAt: "2026-11-09T15:38:00",
+    evaluatedAt: "2026-11-09T15:45:00",
     criteria: {
       symptom_duration: { result: "MET", found: "8 wks, onset 9/14", page: 1, quote: "x 8 weeks" },
       conservative_care: { result: "MET", found: "PT 12 visits, 9/21 to 10/31", page: 3, quote: "12 attended, 0 missed" },
@@ -68,6 +69,8 @@ const FACTS: Record<string, CaseFacts> = {
   "case-2-scott": {
     headline: "Waiting on PT notes (page 4) from Utopia Planitia Rehab",
     receivedKind: "fax",
+    receivedAt: "2026-11-10T08:52:00",
+    evaluatedAt: "2026-11-10T09:10:00",
     resolve: { text: "Request resend of the PT notes (page 4) from Utopia Planitia Rehab", contact: "Utopia Planitia Rehab" },
     criteria: {
       symptom_duration: { result: "MET", found: "7 wks, onset ~9/22", page: 3, quote: "x 7 wks" },
@@ -101,13 +104,15 @@ const FACTS: Record<string, CaseFacts> = {
     ],
   },
   "case-3-sulu": {
-    headline: "Doesn't meet IMG-330: 3 weeks of symptoms, needs 6",
+    headline: "3 weeks of pain and 1 week of PT are short of 6 weeks. Ask Dr. McCoy to order an X-ray, continue PT, re-order at 6 weeks, and release the 11/16 slot.",
     receivedKind: "record",
-    resolve: { text: "Review the symptom gap: 3 weeks recorded, the policy needs 6", contact: "Leonard McCoy, MD" },
+    receivedAt: "2026-11-10T13:05:00",
+    evaluatedAt: "2026-11-10T13:20:00",
+    resolve: { text: "Send Dr. McCoy the draft and release the 11/16 slot", contact: "Leonard McCoy, MD" },
     criteria: {
       symptom_duration: { result: "NOT_MET", found: "3 weeks, needs 6", page: 1, quote: "x 3 wks" },
       conservative_care: { result: "NOT_MET", found: "1 week of PT, needs 6", page: 1, quote: "Started PT last wk" },
-      prior_xray: { result: "NOT_MET", found: "No shoulder X-ray in the order", page: 1, quote: "MRI SHOULDER RIGHT" },
+      prior_xray: { result: "NOT_MET", found: "No shoulder X-ray was performed", page: 1, quote: "MRI SHOULDER RIGHT" },
       no_recent_mri: { result: "UNCLEAR", found: "Not checked: imaging history isn't in the order", page: 1, quote: "MRI SHOULDER RIGHT" },
     },
     evidence: [
@@ -298,8 +303,8 @@ function revOf(ref: string | null, version: PolicyVersion | null): number {
   return version?.versionNumber ?? 1;
 }
 
-function fixByLabel(scanAt: Date): string {
-  return `Fix by ${weekday.format(scanAt)} ${scanAt.getMonth() + 1}/${scanAt.getDate()}`;
+function fixByLabel(at: Date): string {
+  return formatFixBy(at);
 }
 
 function viewerOwns(role: UserRole, status: OrderStatus, channel: Order["channel"]): boolean {
@@ -477,7 +482,7 @@ function summarize(consistency: CheckRow[], criteria: CheckRow[]): ReviewPanel["
 
 function fixtureStillApplies(order: Order): boolean {
   const seed = SEED_ORDERS.find((item) => item.id === order.id);
-  return !seed || seed.status === order.status;
+  return !seed || (seed.status === order.status && seed.reasonCode === order.reasonCode);
 }
 
 function headlineFor(order: Order, facts: CaseFacts | undefined, passing: number, total: number, firstFail: string | undefined): string {
@@ -668,16 +673,16 @@ export function getReviewPanel(orderId: string, viewerRole: UserRole, source?: O
   const counted = criteria.filter((row) => !isAnnotation(row.id));
   const firstFail = counted.find((row) => row.result === "NOT_MET");
   const passing = counted.filter((row) => row.result === "MET" || row.result === "WAIVED" || row.result === "EXCEPTION_MET").length;
-  const receivedAt = facts?.receivedAt ?? "2026-11-09T15:00:00";
-  const evaluated = facts?.hideChecks ? undefined : (facts?.evaluatedAt ?? "2026-11-09T15:40:00");
+  const receivedAt = parseDemoInstant(facts?.receivedAt ?? "2026-11-09T15:00:00").toISOString();
+  const evaluated = facts?.hideChecks ? undefined : parseDemoInstant(facts?.evaluatedAt ?? "2026-11-09T15:40:00").toISOString();
   const attachedReceived = documentsFor(order, facts)
     .filter((doc) => doc.status === "ATTACHED")
     .map(() => receivedAt);
   assertEvaluationAfterReceipt(evaluated, attachedReceived);
 
-  const scanAt = order.scheduledAt ? new Date(order.scheduledAt) : null;
+  const scanAt = order.scheduledAt ? parseDemoInstant(order.scheduledAt) : null;
   const risk = computeTimeRisk({ scanAt, insurer: order.insurer, status: order.status, now: DEMO_NOW });
-  const deadline = scanAt && risk !== "none" ? fixByAt(scanAt, order.insurer) : null;
+  const deadline = scanAt && risk !== "none" ? submitByAt(scanAt, order.insurer) : null;
   const constraint = version && incompleteHandlingOf(version) === "deny_resubmit_new" ? "Denied requests can't be amended" : undefined;
 
   const coverage = ensureCoverage(status, order.blockingChecks ?? [], coverageRows(order), order.id, order.reasonCode);

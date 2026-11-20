@@ -33,6 +33,7 @@
     "src",
     "fixtures",
     "scripts",
+    "tests",
     "vite.config.ts"
   ]
 }

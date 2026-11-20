@@ -5,12 +5,10 @@ import { explainReason } from "@/domain/priorAuth/reasons";
 import type { OtherIssue, ProcessingStep, ReasonCode, ReasonDetail } from "@/domain/priorAuth/types";
 import type { Order } from "@/domain/types";
 import type { StatusId } from "@/domain/statuses";
+import { parseDemoInstant } from "@/lib/demoClock";
 
-/**
- * The prototype's fixed "now". Kirk's packet was printed 11/09/2026 3:38 PM, so the demo clock sits just after,
- * which makes every scan date and time-in-status in the data consistent.
- */
-export const DEMO_NOW = new Date("2026-11-09T16:00:00");
+/** Fixed "now" for the prototype. Defined in lib/demoClock.ts (2:00 PM ET on Nov 10, 2026). */
+export { DEMO_NOW } from "@/lib/demoClock";
 
 // ───────────────────────── Test-library case 1: Kirk (real fixture) ─────────────────────────
 // Status is *derived* by running the deterministic decision logic over the answer key's criteria results,
@@ -48,10 +46,10 @@ export const scottStatus = decide({
 
 // Case 3. The order itself says 3 weeks of pain and 1 week of therapy, under IMG-330's 6 weeks.
 export const suluCriteria: CriterionOutcome[] = [
-  { id: "1", result: "not_met", failClass: "clinical", confidence: 0.97 },
-  { id: "2", result: "not_met", failClass: "clinical", confidence: 0.95 },
-  { id: "3", result: "unclear", failClass: "documents", confidence: 0.3 },
-  { id: "4", result: "unclear", failClass: "documents", confidence: 0.3 },
+  { id: "1", result: "not_met", failClass: "clinical", confidence: 0.97, clinicalKind: "duration", documentCouldChange: false },
+  { id: "2", result: "not_met", failClass: "clinical", confidence: 0.95, clinicalKind: "treatment_length", documentCouldChange: false },
+  { id: "3", result: "unclear", failClass: "documents", confidence: 0.3, pendingDocument: "never_performed" },
+  { id: "4", result: "unclear", failClass: "documents", confidence: 0.3, pendingDocument: "never_performed" },
 ];
 
 export const suluStatus = decide({
@@ -96,9 +94,9 @@ const scottOrder = {
   insurer: "Ferengi Benefit Group",
   plan: "Commercial HMO",
   channel: "portal",
-  scheduledAt: null,
+  scheduledAt: "2026-11-12T09:00:00",
   status: scottStatus,
-  statusSince: "2026-11-09T15:50:00",
+  statusSince: "2026-11-10T08:52:00",
   assigneeId: null,
   reason: "PT notes listed on the cover are not in the fax. Therapy is only the patient's report.",
   nextAction: "Request the PT notes",
@@ -127,10 +125,10 @@ const suluOrder = {
   channel: "portal",
   scheduledAt: "2026-11-16T11:00:00",
   status: suluStatus,
-  statusSince: "2026-11-09T15:40:00",
+  statusSince: "2026-11-10T13:05:00",
   assigneeId: null,
   reason: "Pain for 3 weeks and therapy for 1 week. Both are under the 6 weeks required.",
-  nextAction: "Review with ordering doctor",
+  nextAction: "Send the draft to Dr. McCoy and release the 11/16 slot",
   attachmentCount: 1,
   policyRef: "IMG-330",
   findings: [
@@ -615,6 +613,50 @@ const cases = [
     attachmentCount: 1,
     policyRef: "RAD-114 v3",
   },
+  {
+    id: "case-24-chapel",
+    caseNumber: 24,
+    source: "demo",
+    orderNumber: "ORD-58320",
+    patient: { name: "Christine Chapel", mrn: "HH-0017290", dob: "1991-04-18" },
+    study: "MRI brain",
+    cpt: "70551",
+    side: null,
+    priority: "Routine",
+    insurer: "Vulcan Science Mutual",
+    plan: null,
+    channel: "api",
+    scheduledAt: "2026-11-19T09:30:00",
+    status: "processing",
+    statusSince: "2026-11-10T13:20:00",
+    assigneeId: null,
+    reason: "Still reading the brain MRI packet.",
+    nextAction: "None",
+    attachmentCount: 2,
+    policyRef: "Vulcan brain MRI",
+  },
+  {
+    id: "case-25-rand",
+    caseNumber: 25,
+    source: "demo",
+    orderNumber: "ORD-58321",
+    patient: { name: "Janice Rand", mrn: "HH-0017294", dob: "1993-07-22" },
+    study: "MRI lumbar spine",
+    cpt: "72148",
+    side: null,
+    priority: "Routine",
+    insurer: "Federation Health",
+    plan: null,
+    channel: "api",
+    scheduledAt: "2026-11-20T11:00:00",
+    status: "processing",
+    statusSince: "2026-11-10T13:40:00",
+    assigneeId: null,
+    reason: "Sending the lumbar MRI to Federation Health.",
+    nextAction: "None",
+    attachmentCount: 3,
+    policyRef: "RAD-114 v3",
+  },
 ];
 
 interface Placement {
@@ -632,16 +674,15 @@ const PLACEMENT: Record<number, Placement> = {
   2: {
     status: "needs_admin_review",
     reasonCode: "MISSING_DOCUMENTS",
-    detail: { document: "PT notes", source: "Utopia Planitia Rehab", requested: "Nov 9", followUp: "Nov 10", criterion: "conservative care" },
-    otherIssues: [{ code: "MISSING_DOCUMENTS", detail: { document: "prior knee MRI", source: "Epic", requested: "Nov 9", followUp: "Nov 10", criterion: "no recent MRI", line: "Prior knee MRI not confirmed. Will be checked in Epic on re-run." } }],
+    detail: { document: "PT notes", source: "Utopia Planitia Rehab", requested: "Nov 10", followUp: "Nov 10", criterion: "conservative care" },
+    otherIssues: [{ code: "MISSING_DOCUMENTS", detail: { document: "prior knee MRI", source: "Epic", requested: "Nov 10", followUp: "Nov 10", criterion: "no recent MRI", line: "Prior knee MRI not confirmed. Will be checked in Epic on re-run." } }],
     followUpDueAt: "2026-11-10T15:50:00",
     waitingOn: "Utopia Planitia Rehab",
   },
   3: {
-    status: "needs_clinical_review",
-    reasonCode: "CRITERIA_NOT_MET",
-    detail: { policy: "IMG-330", failures: "3 weeks of symptoms (needs 6); 1 week of therapy", action: "talk to the ordering doctor", doctor: "the ordering doctor" },
-    otherIssues: [{ code: "MISSING_DOCUMENTS", detail: { document: "X-ray", source: "the clinic", requested: "Nov 9", followUp: "Nov 10", criterion: "prior imaging" } }],
+    status: "needs_admin_review",
+    reasonCode: "RETURN_TO_PROVIDER",
+    detail: { failures: "3 weeks of pain and 1 week of PT", doctor: "Dr. McCoy", slot: "11/16" },
   },
   4: { status: "submitted", reasonCode: "INITIAL_REQUEST", detail: { insurer: "Federation Health", channel: "API", date: "Nov 9", ref: "FH-58302", time: "3:20 PM" } },
   5: { status: "needs_admin_review", reasonCode: "PORTAL_UPLOAD", detail: { n: 4, insurer: "Ferengi Benefit Group", k: 5 } },
@@ -669,13 +710,19 @@ const PLACEMENT: Record<number, Placement> = {
   21: { status: "not_required", reasonCode: "SETTING_EXEMPT", detail: { setting: "Inpatient", insurer: "Federation Health" } },
   22: { status: "needs_admin_review", reasonCode: "PORTAL_UPLOAD", detail: { n: 3, insurer: "Andorian Life", k: 4 } },
   23: { status: "submitted", reasonCode: "INITIAL_REQUEST", detail: { insurer: "Federation Health", channel: "API", date: "Nov 9", ref: "FH-58304", time: "3:35 PM" } },
+  24: { status: "processing", reasonCode: null, step: "EVALUATING", detail: { insurer: "Vulcan Science Mutual", n: 4 } },
+  25: { status: "processing", reasonCode: null, step: "SUBMITTING", detail: { insurer: "Federation Health" } },
 };
+
+function asInstant(value: string): string {
+  return parseDemoInstant(value).toISOString();
+}
 
 function finish(draft: { caseNumber: number; reason: string }): Order {
   const place = PLACEMENT[draft.caseNumber];
   if (!place) throw new Error(`No status for case ${draft.caseNumber}`);
   const reasonCode = place.reasonCode;
-  return {
+  const order = {
     ...(draft as unknown as Order),
     status: place.status,
     reasonCode,
@@ -685,6 +732,14 @@ function finish(draft: { caseNumber: number; reason: string }): Order {
     followUpDueAt: place.followUpDueAt ?? null,
     waitingOn: place.waitingOn ?? null,
     reason: reasonCode ? explainReason(reasonCode, place.detail) : draft.reason,
+  };
+  return {
+    ...order,
+    statusSince: asInstant(order.statusSince),
+    scheduledAt: order.scheduledAt ? asInstant(order.scheduledAt) : null,
+    followUpDueAt: order.followUpDueAt ? asInstant(order.followUpDueAt) : null,
+    scheduleHandwritten: order.id === "case-2-scott",
+    submissionBlocked: order.insurer === "Ferengi Benefit Group" && order.reasonCode === "MISSING_DOCUMENTS",
   };
 }
 

@@ -1,29 +1,39 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ChevronsUpDown, CircleCheck, Filter, Info, Search, X } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { Check, ChevronDown, ChevronLeft, ChevronRight, ChevronUp, ChevronsUpDown, Filter, Search, X } from "lucide-react";
 import { AssignMenu, eligiblePeople, firstName } from "@/components/AssignMenu";
 import { Button } from "@/components/ui/button";
 import { Avatar } from "@/components/ui/avatar";
 import { Chip } from "@/components/ui/chip";
+import { CitationChip } from "@/components/ui/citation-chip";
 import { DataTable, type Column } from "@/components/ui/data-table";
 import { FlagIcons } from "@/components/ui/flag-icons";
+import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Kbd } from "@/components/ui/kbd";
 import { PageTitle } from "@/components/ui/page-title";
 import { MenuItem, Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { PropertyList } from "@/components/ui/property-list";
+import { SourceTag } from "@/components/ui/source-tag";
+import { StatusDot } from "@/components/ui/status-dot";
 import { StatusPill } from "@/components/ui/status-pill";
 import { Tabs } from "@/components/ui/tabs";
 import { Tip } from "@/components/ui/tooltip";
 import { PEOPLE } from "@/data/people";
-import { DEMO_NOW } from "@/data/orders";
 import { buildCaseRecord } from "@/domain/caseRecord";
+import { actionStatusLabel } from "@/domain/priorAuth/render";
+import { memberIdFor } from "@/domain/memberId";
+import { normalizeProvider } from "@/domain/providers";
 import { STATUSES } from "@/domain/statuses";
 import { cn } from "@/lib/cn";
-import type { Person } from "@/domain/types";
-import { fmtCountdown, fmtDob, fmtTableDate } from "@/lib/format";
+import type { Order, Person } from "@/domain/types";
+import { DEMO_NOW, SUBMIT_BY_HINT, parseDemoInstant, relativeToClock } from "@/lib/demoClock";
+import { fmtDob, fmtTableDate } from "@/lib/format";
 import { CHANNEL_LABEL, SIDE_SHORT, label } from "@/lib/labels";
+import { eligibilityFor } from "@/lib/mocks/eligibility";
 import { usePersona } from "@/lib/persona";
 import { useOrders } from "@/lib/useWorklistState";
-import { bySchedule, inView, matchesSearch, toRow, VIEWS, type Row, type ViewId } from "@/lib/worklist";
+import { byRiskThenScan, bySchedule, inView, isSlotAtRisk, matchesPolicy, matchesSearch, scanAttention, toRow, VIEWS, type Row, type ViewId } from "@/lib/worklist";
+import { parseWorklistUrl, serializeWorklistUrl, type SortDir, type SortKey, type WorklistUrlState } from "@/lib/worklistQuery";
 
 const PERSONA_DEFAULT_VIEW: Record<Person["role"], ViewId> = {
   coordinator: "admin",
@@ -32,9 +42,6 @@ const PERSONA_DEFAULT_VIEW: Record<Person["role"], ViewId> = {
 };
 
 const PAGE_SIZES = [10, 25, 50] as const;
-
-type SortKey = "patient" | "status" | "reason" | "insurance" | "study" | "appointment" | "provider" | "type" | "urgency" | "received" | "assignee";
-type SortDir = "asc" | "desc";
 
 const isTyping = (t: EventTarget | null) =>
   t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
@@ -61,41 +68,58 @@ function cmpNum(a: number | null, b: number | null, dir: SortDir): number {
   return dir === "asc" ? a - b : b - a;
 }
 
+const SCROLL_PREFIX = "halcyon.worklist.scroll:";
+
 export default function Worklist() {
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
   const { orders, assign, reset } = useOrders();
   const { me } = usePersona();
   const searchRef = useRef<HTMLInputElement>(null);
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const fallbackView = PERSONA_DEFAULT_VIEW[me.role];
+  const url = parseWorklistUrl(params, fallbackView);
+  const view = url.view;
+  const statusFilter = url.status;
+  const reasonFilter = url.reason;
+  const hideWaiting = url.hideWaiting;
+  const slotAtRisk = url.slotAtRisk;
+  const insurerFilter = url.insurer;
+  const policyFilter = url.policy;
+  const query = url.q;
+  const page = url.page;
+  const sort = useMemo(() => ({ key: url.sort, dir: url.dir }), [url.sort, url.dir]);
 
-  const [view, setView] = useState<ViewId>(PERSONA_DEFAULT_VIEW[me.role]);
-  const [statusFilter, setStatusFilter] = useState<string | null>(null);
-  const [reasonFilter, setReasonFilter] = useState<string | null>(null);
-  const [hideWaiting, setHideWaiting] = useState(false);
-  const [insurerFilter, setInsurerFilter] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [cursor, setCursor] = useState<string | null>(null);
-  const [page, setPage] = useState(0);
   const [pageSize, setPageSize] = useState<(typeof PAGE_SIZES)[number]>(25);
-  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: "appointment", dir: "asc" });
+
+  function commit(patch: Partial<WorklistUrlState>) {
+    setParams(
+      (prev) => {
+        const current = parseWorklistUrl(prev, fallbackView);
+        return serializeWorklistUrl({ ...current, ...patch }, fallbackView);
+      },
+      { replace: true },
+    );
+  }
 
   const rows = useMemo(() => orders.map((o) => toRow(o)), [orders]);
 
-  const providers = useMemo(() => {
-    const map = new Map<string, string | null>();
-    for (const order of orders) {
-      const value = buildCaseRecord(order).elements.find((element) => element.label === "Ordering provider")?.value ?? null;
-      map.set(order.id, value ? value.split(" · ")[0] : null);
-    }
+  const facts = useMemo(() => {
+    const map = new Map<string, PatientFacts>();
+    for (const order of orders) map.set(order.id, factsFor(order));
     return map;
   }, [orders]);
+  const viewer = useMemo(() => ({ id: me.id, role: me.role }), [me.id, me.role]);
 
   const visible = useMemo(() => {
     const filtered = rows
-      .filter((r) => inView(r, view))
+      .filter((r) => (policyFilter ? !r.closed && matchesPolicy(r.order.policyRef, policyFilter) : inView(r, view, DEMO_NOW, viewer)))
       .filter((r) => (statusFilter ? r.order.status === statusFilter : true))
       .filter((r) => (reasonFilter ? r.reasonChip === reasonFilter : true))
       .filter((r) => (hideWaiting ? !r.waiting : true))
+      .filter((r) => (slotAtRisk ? isSlotAtRisk(r) : true))
       .filter((r) => (insurerFilter ? r.order.insurer === insurerFilter : true))
       .filter((r) => matchesSearch(r, query));
     const assigneeName = (id: string | null) => PEOPLE.find((p) => p.id === id)?.name ?? "";
@@ -111,9 +135,9 @@ export default function Worklist() {
         case "study":
           return cmpText(a.order.study, b.order.study, dir);
         case "appointment":
-          return dir === "asc" ? bySchedule(a, b) : bySchedule(b, a);
+          return dir === "asc" ? byRiskThenScan(a, b) : bySchedule(b, a);
         case "provider":
-          return cmpText(providers.get(a.order.id), providers.get(b.order.id), dir);
+          return cmpText(facts.get(a.order.id)?.provider, facts.get(b.order.id)?.provider, dir);
         case "reason":
           return cmpText(a.reasonChip ?? a.stepText, b.reasonChip ?? b.stepText, dir);
         case "type":
@@ -126,16 +150,16 @@ export default function Worklist() {
           return cmpText(assigneeName(a.order.assigneeId), assigneeName(b.order.assigneeId), dir);
       }
     });
-  }, [rows, view, statusFilter, reasonFilter, hideWaiting, insurerFilter, query, sort, providers]);
+  }, [rows, view, statusFilter, reasonFilter, hideWaiting, slotAtRisk, insurerFilter, policyFilter, query, sort, facts, viewer]);
 
   const pageCount = Math.max(1, Math.ceil(visible.length / pageSize));
   const safePage = Math.min(page, pageCount - 1);
   useEffect(() => {
-    if (page !== safePage) setPage(safePage);
+    if (page !== safePage) commit({ page: safePage });
   }, [page, safePage]);
   const pageRows = visible.slice(safePage * pageSize, (safePage + 1) * pageSize);
 
-  const inScope = useMemo(() => rows.filter((r) => inView(r, view)), [rows, view]);
+  const inScope = useMemo(() => rows.filter((r) => inView(r, view, DEMO_NOW, viewer)), [rows, view, viewer]);
   const statusOptions = useMemo(
     () => [...new Set(inScope.map((r) => r.order.status))].map((id) => ({ id: id as string, label: STATUSES[id].label })),
     [inScope],
@@ -168,19 +192,17 @@ export default function Worklist() {
     });
 
   function changeView(v: ViewId) {
-    setView(v);
+    commit({ view: v, status: null, reason: null, insurer: null, policy: null, hideWaiting: false, page: 0 });
     setSelected(new Set());
-    setStatusFilter(null);
-    setReasonFilter(null);
-    setHideWaiting(false);
-    setInsurerFilter(null);
     setCursor(null);
-    setPage(0);
   }
 
   function toggleSort(key: SortKey) {
-    setSort((prev) => (prev.key === key ? { key, dir: prev.dir === "asc" ? "desc" : "asc" } : { key, dir: "asc" }));
-    setPage(0);
+    commit({
+      sort: key,
+      dir: sort.key === key ? (sort.dir === "asc" ? "desc" : "asc") : "asc",
+      page: 0,
+    });
   }
 
   const prevPersonaId = useRef(me.id);
@@ -189,6 +211,21 @@ export default function Worklist() {
     prevPersonaId.current = me.id;
     changeView(PERSONA_DEFAULT_VIEW[me.role]);
   }, [me.id, me.role]);
+
+  const searchKey = params.toString();
+  useLayoutEffect(() => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const key = `${SCROLL_PREFIX}${searchKey}`;
+    const saved = readScroll(key);
+    if (saved != null) el.scrollTop = saved;
+    const save = () => writeScroll(key, el.scrollTop);
+    el.addEventListener("scroll", save, { passive: true });
+    return () => {
+      save();
+      el.removeEventListener("scroll", save);
+    };
+  }, [searchKey]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -200,7 +237,7 @@ export default function Worklist() {
         const at = Math.min(Math.max(to, 0), visible.length - 1);
         const row = visible[at];
         setCursor(row.order.id);
-        setPage(Math.floor(at / pageSize));
+        commit({ page: Math.floor(at / pageSize) });
         requestAnimationFrame(() => {
           document.querySelector(`[data-row-key="${row.order.id}"]`)?.scrollIntoView({ block: "nearest" });
         });
@@ -242,166 +279,168 @@ export default function Worklist() {
     </button>
   );
 
+  const showStatus = view === "all";
+  const selectPage = (
+    <input
+      type="checkbox"
+      aria-label="Select page"
+      checked={allSelected}
+      onChange={() =>
+        setSelected((prev) => {
+          const next = new Set(prev);
+          for (const row of pageRows) {
+            if (allSelected) next.delete(row.order.id);
+            else next.add(row.order.id);
+          }
+          return next;
+        })
+      }
+      onClick={(e) => e.stopPropagation()}
+      className={cn("absolute -left-6 accent-accent", selected.size === 0 && "opacity-0 group-hover/table:opacity-100 focus-visible:opacity-100")}
+    />
+  );
+
   const columns: Column<Row>[] = [
     {
-      id: "patient",
-      header: "Patient",
-      width: "min-w-44",
+      id: "flags",
+      header: "Flags",
+      width: "9%",
       headerCell: (
+        <span className="relative inline-flex items-center">
+          {selectPage}
+          Flags
+        </span>
+      ),
+      cell: (r) => (
         <span className="relative inline-flex items-center">
           <input
             type="checkbox"
-            aria-label="Select page"
-            checked={allSelected}
-            onChange={() =>
-              setSelected((prev) => {
-                const next = new Set(prev);
-                for (const row of pageRows) {
-                  if (allSelected) next.delete(row.order.id);
-                  else next.add(row.order.id);
-                }
-                return next;
-              })
-            }
+            aria-label={`Select ${r.order.patient?.name ?? "unmatched document"}`}
+            checked={selected.has(r.order.id)}
+            onChange={() => toggle(r.order.id)}
             onClick={(e) => e.stopPropagation()}
-            className={cn("absolute -left-6 accent-accent", selected.size === 0 && "opacity-0 group-hover/table:opacity-100 focus-visible:opacity-100")}
+            className="absolute -left-6 accent-accent opacity-0 checked:opacity-100 group-hover:opacity-100"
           />
-          {sortHeader("patient", "Patient")}
+          <FlagIcons flags={r.flags} />
         </span>
       ),
+    },
+    {
+      id: "scan",
+      header: "Scan",
+      width: "16%",
+      headerCell: (
+        <Tip content={SUBMIT_BY_HINT}>
+          <span>{sortHeader("appointment", "Scan")}</span>
+        </Tip>
+      ),
+      cell: (r) => <ScanCell row={r} />,
+    },
+    {
+      id: "patient",
+      header: "Patient",
+      width: "16%",
+      wrap: true,
+      headerCell: sortHeader("patient", "Patient"),
+      cell: (r) => <PatientCell row={r} facts={facts.get(r.order.id)} />,
+    },
+    {
+      id: "study",
+      header: "Study",
+      width: "12%",
+      headerCell: sortHeader("study", "Study"),
       cell: (r) => {
-        const patient = r.order.patient;
+        const text = r.order.side ? `${r.order.study} · ${label(SIDE_SHORT, r.order.side)}` : r.order.study;
+        if (!text) return null;
         return (
-          <span className="relative block">
-            <input
-              type="checkbox"
-              aria-label={`Select ${patient?.name ?? "unmatched document"}`}
-              checked={selected.has(r.order.id)}
-              onChange={() => toggle(r.order.id)}
-              onClick={(e) => e.stopPropagation()}
-              className="absolute -left-6 top-1 accent-accent opacity-0 checked:opacity-100 group-hover:opacity-100"
-            />
-            {patient ? (
-              <span className="min-w-0">
-                <span className="flex items-center gap-1">
-                  <span className="whitespace-nowrap font-medium text-accent-fg">{patient.name}</span>
-                  <Tip content={<span className="font-mono">{patient.mrn}</span>}>
-                    <button type="button" aria-label={`Record number for ${patient.name}`} onClick={(e) => e.stopPropagation()} className="text-fg-3 hover:text-fg">
-                      <Info size={14} />
-                    </button>
-                  </Tip>
-                  <FlagIcons flags={r.flags} />
-                </span>
-                <span className="tabular block text-caption text-fg-2">{fmtDob(patient.dob)}</span>
-              </span>
-            ) : (
-              <span className="text-fg-3">Unmatched</span>
-            )}
-          </span>
-        );
-      },
-    },
-    {
-      id: "status",
-      header: "Status",
-      headerCell: sortHeader("status", "Status"),
-      cell: (r) => <StatusPill status={r.order.status} channel={r.order.channel} reasonCode={r.order.reasonCode} />,
-    },
-    {
-      id: "reason",
-      header: "Reason",
-      headerCell: sortHeader("reason", "Reason"),
-      cell: (r) => <ReasonCell row={r} />,
-    },
-    {
-      id: "insurance",
-      header: "Insurance",
-      width: "max-w-52",
-      headerCell: sortHeader("insurance", "Insurance"),
-      cell: (r) => {
-        const text = [r.order.insurer, r.order.plan].filter(Boolean).join(" · ");
-        if (!text) return <span className="text-fg-3">—</span>;
-        return (
-          <Tip content={text}>
-            <span className="inline-flex max-w-52 items-center gap-2">
-              <CircleCheck size={14} className="shrink-0 text-good" />
-              <span className="truncate">{text}</span>
-            </span>
+          <Tip content={`${text}. ${EPIC_CHECKED}`}>
+            <span className="block truncate">{text}</span>
           </Tip>
         );
       },
     },
     {
-      id: "study",
-      header: "Study",
-      headerCell: sortHeader("study", "Study"),
-      cell: (r) => (
-        <span>
-          {r.order.study}
-          {r.order.side && <span className="text-fg-2"> · {label(SIDE_SHORT, r.order.side)}</span>}
-        </span>
-      ),
+      id: "insurer",
+      header: "Insurer",
+      width: "15%",
+      headerCell: sortHeader("insurance", "Insurer"),
+      cell: (r) => {
+        if (!r.order.insurer) return null;
+        const member = facts.get(r.order.id)?.memberId;
+        const full = [r.order.insurer, r.order.plan, member].filter(Boolean).join(" · ");
+        return (
+          <Tip content={`${full}. ${EPIC_CHECKED}`}>
+            <span className="block min-w-0">
+              <span className="block truncate">{r.order.insurer}</span>
+              {member && <span className="block truncate font-mono text-caption text-fg-2">{member}</span>}
+            </span>
+          </Tip>
+        );
+      },
     },
+    showStatus
+      ? {
+          id: "status",
+          header: "Status",
+          width: "14%",
+          headerCell: sortHeader("status", "Status"),
+          cell: (r) => (
+            <Tip content={r.order.reason}>
+              <span className="block truncate">
+                <StatusPill status={r.order.status} channel={r.order.channel} reasonCode={r.order.reasonCode} />
+              </span>
+            </Tip>
+          ),
+        }
+      : {
+          id: "reason",
+          header: "Reason",
+          width: "14%",
+          headerCell: sortHeader("reason", "Reason"),
+          cell: (r) => <ReasonCell row={r} />,
+        },
     {
-      id: "appointment",
-      header: "Appointment",
-      headerCell: sortHeader("appointment", "Appointment"),
-      cell: (r) =>
-        r.order.scheduledAt ? (
-          <span className="tabular">{fmtTableDate(new Date(r.order.scheduledAt))}</span>
+      id: "owner",
+      header: "Owner",
+      width: "10%",
+      headerCell: sortHeader("assignee", "Owner"),
+      cell: (r) => {
+        const canAssign = eligiblePeople(r.ownerRole).some((person) => person.id === me.id);
+        const menu = (
+          <span className="inline-flex max-w-full" onClick={(e) => e.stopPropagation()}>
+            <AssignMenu role={r.ownerRole} assigneeId={r.order.assigneeId} me={me} closed={r.closed} onAssign={(pid) => assign([r.order.id], pid)} />
+          </span>
+        );
+        return canAssign ? (
+          <Tip content="Assign to me" shortcut="A">
+            {menu}
+          </Tip>
         ) : (
-          <span className="text-fg-3">—</span>
-        ),
+          menu
+        );
+      },
     },
     {
-      id: "provider",
-      header: "Ordering provider",
-      headerCell: sortHeader("provider", "Ordering provider"),
-      cell: (r) => providers.get(r.order.id) ?? <span className="text-fg-3">—</span>,
-    },
-    {
-      id: "type",
-      header: "Type",
-      headerCell: sortHeader("type", "Type"),
-      cell: (r) => (r.order.channel ? label(CHANNEL_LABEL, r.order.channel) : <span className="text-fg-3">—</span>),
-    },
-    {
-      id: "urgency",
-      header: "Urgency",
-      headerCell: sortHeader("urgency", "Urgency"),
-      cell: (r) => (r.order.priority === "Urgent" ? <span className="font-medium text-bad">Urgent</span> : <span className="text-fg-3">—</span>),
-    },
-    {
-      id: "scan-risk",
-      header: "Scan at risk",
-      cell: (r) =>
-        r.flags.some((flag) => flag.id === "scan_at_risk") ? <span className="text-bad">At risk</span> : <span className="text-fg-3">—</span>,
-    },
-    {
-      id: "received",
-      header: "Received",
-      headerCell: sortHeader("received", "Received"),
-      cell: (r) => <span className="tabular text-fg-2">{fmtCountdown(new Date(r.order.statusSince), DEMO_NOW)}</span>,
-    },
-    {
-      id: "assignee",
-      header: "Assignee",
-      width: "w-36",
-      headerCell: sortHeader("assignee", "Assignee"),
+      id: "age",
+      header: "Age",
+      width: "8%",
+      align: "right",
+      headerCell: sortHeader("received", "Age"),
       cell: (r) => (
-        <div onClick={(e) => e.stopPropagation()}>
-          <AssignMenu role={r.ownerRole} assigneeId={r.order.assigneeId} me={me} closed={r.closed} onAssign={(pid) => assign([r.order.id], pid)} />
-        </div>
+        <Tip content={parseDemoInstant(r.order.statusSince).toISOString()}>
+          <span className="tabular text-fg-2">{relativeToClock(r.order.statusSince)}</span>
+        </Tip>
       ),
     },
   ];
+
 
   const openCount = rows.filter((r) => !r.closed).length;
   const from = visible.length === 0 ? 0 : safePage * pageSize + 1;
   const to = Math.min(visible.length, (safePage + 1) * pageSize);
 
   return (
-    <main className="flex h-full min-h-0 flex-col bg-panel">
+    <main aria-keyshortcuts="j k Enter a" className="flex h-full min-h-0 flex-col bg-panel">
       <div className="flex shrink-0 items-center gap-4 px-6 pt-6">
         <PageTitle count={openCount}>Worklist</PageTitle>
         <Button variant="ghost" className="ml-auto" onClick={() => { reset(); setSelected(new Set()); }}>
@@ -451,60 +490,62 @@ export default function Worklist() {
               <input
                 ref={searchRef}
                 value={query}
-                onChange={(e) => {
-                  setQuery(e.target.value);
-                  setPage(0);
-                }}
-                onKeyDown={(e) => e.key === "Escape" && (e.currentTarget.blur(), setQuery(""), setPage(0))}
+                onChange={(e) => commit({ q: e.target.value, page: 0 })}
+                onKeyDown={(e) => e.key === "Escape" && (e.currentTarget.blur(), commit({ q: "", page: 0 }))}
                 placeholder="Search by name, birthdate"
                 aria-label="Search by name, birthdate"
+                aria-keyshortcuts="/"
                 className="h-7 w-72 rounded-md border border-line bg-panel pl-8 pr-8 text-body text-fg outline-none placeholder:text-fg-3 focus:border-accent-fg"
               />
               <span className="absolute right-2 top-1/2 -translate-y-1/2">
                 <Kbd>/</Kbd>
               </span>
             </div>
+            {slotAtRisk ? (
+              <RemovableChip onRemove={() => commit({ slotAtRisk: false, page: 0 })}>Slot at risk</RemovableChip>
+            ) : (
+              <Button variant="ghost" aria-pressed={false} onClick={() => commit({ slotAtRisk: true, page: 0 })}>
+                Slot at risk
+              </Button>
+            )}
             <FilterMenu
               title={reasonQueue ? "Reason" : "Status"}
               value={reasonQueue ? reasonFilter : statusFilter}
               options={reasonQueue ? reasonOptions : statusOptions}
               onChange={(id) => {
-                if (reasonQueue) setReasonFilter(id);
-                else setStatusFilter(id);
-                setPage(0);
+                if (reasonQueue) commit({ reason: id, page: 0 });
+                else commit({ status: id, page: 0 });
               }}
               insurer={insurerFilter}
               insurerOptions={insurerOptions}
-              onInsurer={(id) => {
-                setInsurerFilter(id);
-                setPage(0);
-              }}
+              onInsurer={(id) => commit({ insurer: id, page: 0 })}
             />
             {view === "admin" && (
-              <Button variant="secondary" aria-pressed={hideWaiting} onClick={() => { setHideWaiting((on) => !on); setPage(0); }}>
+              <Button variant="secondary" aria-pressed={hideWaiting} onClick={() => commit({ hideWaiting: !hideWaiting, page: 0 })}>
                 {hideWaiting ? "Waiting hidden" : "Hide waiting"}
               </Button>
             )}
-            {(statusFilter || reasonFilter || insurerFilter) && (
+            {(statusFilter || reasonFilter || insurerFilter || policyFilter) && (
               <span className="ml-1 flex items-center gap-1">
                 {statusFilter && (
-                  <RemovableChip onRemove={() => setStatusFilter(null)}>
+                  <RemovableChip onRemove={() => commit({ status: null })}>
                     {label(Object.fromEntries(statusOptions.map((o) => [o.id, o.label])), statusFilter)}
                   </RemovableChip>
                 )}
-                {reasonFilter && <RemovableChip onRemove={() => setReasonFilter(null)}>{reasonFilter}</RemovableChip>}
-                {insurerFilter && <RemovableChip onRemove={() => setInsurerFilter(null)}>{insurerFilter}</RemovableChip>}
+                {reasonFilter && <RemovableChip onRemove={() => commit({ reason: null })}>{reasonFilter}</RemovableChip>}
+                {insurerFilter && <RemovableChip onRemove={() => commit({ insurer: null })}>{insurerFilter}</RemovableChip>}
+                {policyFilter && <RemovableChip onRemove={() => commit({ policy: null })}>{policyFilter}</RemovableChip>}
               </span>
             )}
           </>
         )}
       </div>
 
-      <div className="shrink-0 px-6">
-        <Tabs tabs={VIEWS.map((v) => ({ ...v, count: rows.filter((r) => inView(r, v.id)).length }))} value={view} onChange={changeView} />
+      <div className="shrink-0 overflow-x-auto px-6">
+        <Tabs tabs={VIEWS.map((v) => ({ ...v, count: rows.filter((r) => inView(r, v.id, DEMO_NOW, viewer)).length }))} value={view} onChange={changeView} />
       </div>
 
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div ref={scrollerRef} className="min-h-0 flex-1 overflow-auto">
         {view === "with_insurer" ? (
           <div>
             {(["Awaiting", "Pended", "Appeal"] as const).map((group) => {
@@ -517,7 +558,7 @@ export default function Worklist() {
                   {grouped.length > 0 && (
                     <DataTable
                       comfortable
-                      className="min-w-max"
+                      className="table-fixed"
                       columns={columns}
                       rows={grouped}
                       getKey={(r) => r.order.id}
@@ -533,7 +574,7 @@ export default function Worklist() {
         ) : (
           <DataTable
             comfortable
-            className="min-w-max"
+            className="table-fixed"
             columns={columns}
             rows={pageRows}
             getKey={(r) => r.order.id}
@@ -552,7 +593,7 @@ export default function Worklist() {
             value={pageSize}
             onChange={(e) => {
               setPageSize(Number(e.target.value) as (typeof PAGE_SIZES)[number]);
-              setPage(0);
+              commit({ page: 0 });
             }}
             className="h-7 rounded-md border border-line bg-panel px-2 text-body text-fg outline-none"
           >
@@ -567,10 +608,10 @@ export default function Worklist() {
           <span className="tabular text-caption text-fg-2">
             {from}–{to} of {visible.length}
           </span>
-          <Button variant="ghost" aria-label="Previous page" disabled={safePage === 0} onClick={() => setPage(safePage - 1)}>
+          <Button variant="ghost" aria-label="Previous page" disabled={safePage === 0} onClick={() => commit({ page: safePage - 1 })}>
             <ChevronLeft size={16} />
           </Button>
-          <Button variant="ghost" aria-label="Next page" disabled={safePage >= pageCount - 1} onClick={() => setPage(safePage + 1)}>
+          <Button variant="ghost" aria-label="Next page" disabled={safePage >= pageCount - 1} onClick={() => commit({ page: safePage + 1 })}>
             <ChevronRight size={16} />
           </Button>
         </span>
@@ -579,21 +620,168 @@ export default function Worklist() {
   );
 }
 
+function readScroll(key: string): number | null {
+  try {
+    const raw = sessionStorage.getItem(key);
+    if (raw == null) return null;
+    const value = Number(raw);
+    return Number.isFinite(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeScroll(key: string, value: number) {
+  try {
+    sessionStorage.setItem(key, String(value));
+  } catch {
+    // Private mode can refuse storage. The list still works.
+  }
+}
+
 function insurerBucket(reason: string | null): "Awaiting" | "Pended" | "Appeal" {
   if (reason === "PENDED_BY_INSURER") return "Pended";
   if (reason === "APPEAL") return "Appeal";
   return "Awaiting";
 }
 
-function ReasonCell({ row }: { row: Row }) {
-  if (row.stepText) return <span className="text-fg-3">{row.stepText}</span>;
-  if (!row.reasonChip) return <span className="text-fg-3">—</span>;
-  if (row.closed) return <span className="text-fg-3">{row.reasonChip}</span>;
+const EPIC_CHECKED = `Epic · checked ${fmtTableDate(DEMO_NOW)}`;
+
+interface PatientFacts {
+  provider: string | null;
+  providerPage: number | null;
+  providerQuote: string | null;
+  memberId: string | null;
+  dobPage: number | null;
+  dobQuote: string | null;
+}
+
+function factsFor(order: Order): PatientFacts {
+  const record = buildCaseRecord(order);
+  const provider = record.elements.find((element) => element.label === "Ordering provider");
+  const dob = record.elements.find((element) => element.label === "DOB and MRN");
+  return {
+    provider: provider?.value ? normalizeProvider(provider.value.split(" · ")[0] ?? provider.value).list : null,
+    providerPage: provider?.cite?.page ?? null,
+    providerQuote: provider?.cite?.quote ?? null,
+    memberId: memberIdFor(order)?.value ?? eligibilityFor(order.patient?.mrn)?.memberId ?? null,
+    dobPage: dob?.cite?.page ?? null,
+    dobQuote: dob?.cite?.quote ?? null,
+  };
+}
+
+function Sourced({ text, page, quote, mono }: { text: string | null; page?: number | null; quote?: string | null; mono?: boolean }) {
+  if (!text) return null;
   return (
-    <Tip content={row.order.reason}>
-      <span className="inline-flex flex-col items-start gap-1">
+    <span className="inline-flex min-w-0 items-center gap-1">
+      <span className={cn("truncate", mono && "font-mono")}>{text}</span>
+      {page ? <CitationChip page={page} excerpt={quote ?? undefined} /> : <SourceTag lastRun={fmtTableDate(DEMO_NOW)} />}
+    </span>
+  );
+}
+
+function ScanCell({ row }: { row: Row }) {
+  if (!row.order.scheduledAt) return <span className="text-fg-2">No slot</span>;
+  const when = fmtTableDate(parseDemoInstant(row.order.scheduledAt));
+  const atRisk = scanAttention(row) === "At risk";
+  const note = [atRisk ? "At risk" : "", row.order.scheduleHandwritten ? "Handwritten" : "", SUBMIT_BY_HINT].filter(Boolean).join(". ");
+  return (
+    <Tip content={`${when}. ${note}`}>
+      <span className="inline-flex max-w-full items-center gap-2">
+        {atRisk ? (
+          <span aria-label="At risk" className="inline-flex">
+            <StatusDot tone="blocked" />
+          </span>
+        ) : (
+          <span className="inline-block size-dot shrink-0" aria-hidden />
+        )}
+        <span className="min-w-0">
+          <span className="tabular block truncate">{when}</span>
+          {(atRisk || row.order.scheduleHandwritten || row.order.priority === "Urgent") && (
+            <span className={cn("block truncate text-caption", atRisk || row.order.priority === "Urgent" ? "text-bad" : "text-fg-3")}>
+              {[row.order.priority === "Urgent" ? "Urgent" : "", atRisk ? "At risk" : "", row.order.scheduleHandwritten ? "Handwritten" : ""].filter(Boolean).join(" · ")}
+            </span>
+          )}
+        </span>
+      </span>
+    </Tip>
+  );
+}
+
+function PatientCell({ row, facts }: { row: Row; facts: PatientFacts | undefined }) {
+  const patient = row.order.patient;
+  if (!patient) return <span className="text-fg-2">Unmatched</span>;
+  const dob = fmtDob(patient.dob);
+  const type = row.order.channel ? label(CHANNEL_LABEL, row.order.channel) : null;
+  return (
+    <span className="block min-w-0 leading-4">
+      <HoverCard openDelay={300} closeDelay={80}>
+        <HoverCardTrigger asChild>
+          <Link to={`/case/${row.order.id}`} className="block truncate font-medium text-fg" onClick={(e) => e.stopPropagation()}>
+            {patient.name}
+          </Link>
+        </HoverCardTrigger>
+        <HoverCardContent onClick={(e) => e.stopPropagation()}>
+          <PropertyList
+            items={[
+              { label: "DOB", value: <Sourced text={dob} page={facts?.dobPage} quote={facts?.dobQuote} mono /> },
+              { label: "MRN", value: <Sourced text={patient.mrn} page={facts?.dobPage} quote={facts?.dobQuote} mono /> },
+              { label: "Member ID", value: <Sourced text={facts?.memberId ?? null} mono /> },
+              { label: "Ordering provider", value: <Sourced text={facts?.provider ?? null} page={facts?.providerPage} quote={facts?.providerQuote} /> },
+              { label: "Type", value: <Sourced text={type} /> },
+              { label: "Reason", value: row.order.reason || null },
+            ]}
+          />
+          <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-line pt-2 text-caption text-fg-2">
+            <span className="inline-flex items-center gap-1">
+              Move <Kbd>J</Kbd>
+              <Kbd>K</Kbd>
+            </span>
+            <span className="inline-flex items-center gap-1">
+              Open <Kbd>Enter</Kbd>
+            </span>
+            <span className="inline-flex items-center gap-1">
+              Assign <Kbd>A</Kbd>
+            </span>
+          </div>
+        </HoverCardContent>
+      </HoverCard>
+      <span className="block truncate font-mono text-caption text-fg-2">
+        {dob} · {patient.mrn}
+      </span>
+    </span>
+  );
+}
+
+function ReasonCell({ row }: { row: Row }) {
+  const waiting = row.waiting && row.order.waitingOn ? `Waiting on ${row.order.waitingOn}` : "";
+  const tip = [row.order.reason, waiting].filter(Boolean).join(". ");
+  if (row.stepText) {
+    return (
+      <Tip content={tip}>
+        <span className="block truncate text-fg-2">{row.stepText}</span>
+      </Tip>
+    );
+  }
+  if (actionStatusLabel(row.order.reasonCode) && row.order.reason) {
+    return (
+      <Tip content={tip}>
+        <span className="block truncate">{row.order.reason}</span>
+      </Tip>
+    );
+  }
+  if (!row.reasonChip) return null;
+  if (row.closed) {
+    return (
+      <Tip content={tip}>
+        <span className="block truncate text-fg-2">{row.reasonChip}</span>
+      </Tip>
+    );
+  }
+  return (
+    <Tip content={tip}>
+      <span className="inline-flex max-w-full">
         <Chip>{row.reasonChip}</Chip>
-        {row.waiting && row.order.waitingOn && <span className="text-caption text-fg-3">waiting on {row.order.waitingOn}</span>}
       </span>
     </Tip>
   );

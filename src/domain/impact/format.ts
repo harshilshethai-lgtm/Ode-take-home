@@ -1,5 +1,8 @@
 import {
+  DENIAL_MINUTES,
   DIRECTION_LABEL,
+  NURSE_REVIEW_MINUTES,
+  type Assumptions,
   type Direction,
   type MetricDef,
   type Unit,
@@ -72,10 +75,44 @@ export function fmtHours(n: number): string {
   return `${sign}${Math.abs(Math.round(n)).toLocaleString("en-US")} hr`;
 }
 
-export function valueLine(annual: { dollars: number | null; hours: number | null }): string {
+export function valueLine(annual: { dollars: number | null; hours: number | null }, hoursLabel?: "nurse"): string {
   if (annual.dollars != null) return `≈ ${fmtMoney(annual.dollars)}/yr at current rate`;
-  if (annual.hours != null) return `≈ ${fmtHours(annual.hours)}/yr at current rate`;
+  if (annual.hours != null) {
+    const unit = hoursLabel === "nurse" ? "nurse hr" : "hr";
+    const sign = annual.hours < 0 ? "−" : "";
+    return `≈ ${sign}${Math.abs(Math.round(annual.hours)).toLocaleString("en-US")} ${unit}/yr`;
+  }
   return NEEDS_DATA_LABEL;
+}
+
+/** One-line formula for the assumptions drawer. Same inputs the card's annual figure uses. */
+export function leverFormula(metric: MetricDef, current: number, baseline: number | null, assumptions: Assumptions): string {
+  const requests = assumptions.requestsPerMonth;
+  if (requests == null) return "Set monthly requests to price this.";
+  const volume = requests.toLocaleString("en-US");
+  const now = formatMetric(metric, current);
+  const base = baseline == null ? "baseline" : formatMetric(metric, baseline);
+  if (metric.id === "nurse_touch") {
+    const cost = assumptions.nurseCostPerHour == null ? "nurse cost" : `$${assumptions.nurseCostPerHour}`;
+    return `${volume} × ${NURSE_REVIEW_MINUTES} min × (1 − ${now}) × ${cost} × 12`;
+  }
+  if (metric.id === "coord_minutes") {
+    const cost = assumptions.coordCostPerHour == null ? "no coordinator cost" : `$${assumptions.coordCostPerHour}`;
+    return `${volume} × (${base} − ${now}) ÷ 60 × ${cost} × 12`;
+  }
+  if (metric.id === "lost_scan_rate" || metric.id === "wrong_not_needed") {
+    const scan = assumptions.revenuePerScan == null ? "revenue per scan" : `$${assumptions.revenuePerScan}`;
+    return `${volume} × (${base} − ${now}) × ${scan} × 12`;
+  }
+  if (metric.id === "denial_rate") {
+    return `${volume} × (11% − ${now}) × ${DENIAL_MINUTES} min × 12`;
+  }
+  return metric.formula;
+}
+
+export function exactMoney(n: number): string {
+  const sign = n < 0 ? "−" : "";
+  return `${sign}$${Math.abs(Math.round(n)).toLocaleString("en-US")}`;
 }
 
 export function windowCopy(weeks: number[], partial: boolean): string {

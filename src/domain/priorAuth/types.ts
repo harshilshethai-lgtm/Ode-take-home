@@ -31,6 +31,8 @@ export type AdminReason =
   | "INSURER_MISMATCH"
   | "CPT_MISMATCH"
   | "PORTAL_UPLOAD"
+  | "MEMBER_ID_MISSING"
+  | "RETURN_TO_PROVIDER"
   | "SUBMISSION_FAILED"
   | "MORE_INFO_REQUESTED"
   | "STATUS_CHECK_FAILED"
@@ -133,6 +135,12 @@ export interface CriterionResult {
   /** Overrides the evaluation-wide confidence threshold. */
   threshold?: number;
   label?: string;
+  /** Duration and treatment length can be returned to the ordering doctor when no document would change them. */
+  clinicalKind?: "duration" | "treatment_length" | "other";
+  /** True when a document that may still arrive could change this result. */
+  documentCouldChange?: boolean;
+  /** A study that was never performed cannot be chased. */
+  pendingDocument?: "never_performed" | "elsewhere";
 }
 
 export type Channel = "api" | "portal";

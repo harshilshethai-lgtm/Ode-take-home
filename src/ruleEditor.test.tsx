@@ -227,25 +227,12 @@ describe("rule editing", () => {
     expect(button("Edit rules")).not.toBeNull();
   });
 
-  it("New policy creates the policy with an empty draft v1 in edit mode", () => {
+  it("New policy is read-only in the prototype", () => {
     render("/settings");
-    click(button("New policy"));
-    const dialog = document.querySelector('[role="dialog"]')!;
-    expect((button("Create policy", dialog) as HTMLButtonElement).disabled).toBe(true);
-    type(input("Payer", dialog), ""); // "New payer…"
-    type(input("Payer name", dialog), "Bajoran Health");
-    type(input("Policy ID", dialog), "CT-500");
-    type(input("Title", dialog), "CT of the head");
-    type(input("Body site", dialog), "brain");
-    click(button("Create policy", dialog));
-
-    const created = rulesApi.listPolicies().find((s) => s.policy.externalPolicyId === "CT-500")!;
-    expect(created.payer.name).toBe("Bajoran Health");
-    expect(created.openDraft).toMatchObject({ versionNumber: 1, status: "draft", criteria: [], exceptions: [] });
-    expect(text()).toContain("Draft v1");
-    expect(text()).toContain("No criteria yet");
-    expect(text()).toContain("Add at least one CPT code");
-    expect(button("Publish…")!.disabled).toBe(true);
+    const create = button("New policy") as HTMLButtonElement;
+    expect(create.disabled).toBe(true);
+    click(create);
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
   it("CPT codes, plan types and waiver triggers are chips", () => {
@@ -343,7 +330,7 @@ describe("compare, publish and change visibility", () => {
     click(button("Publish…"));
     const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain("Publish v4");
-    expect((input("Effective from", dialog) as HTMLInputElement).value).toBe("2026-11-09"); // today by default
+    expect((input("Effective from", dialog) as HTMLInputElement).value).toBe("2026-11-10"); // today on the demo clock
     expect(dialog.textContent).toContain("takes effect today");
     type(input("Effective from", dialog), "2026-12-01");
     expect(dialog.textContent).toContain("Scheduled: v4 takes effect Dec 1. v3 stays active until Nov 30.");
@@ -384,7 +371,8 @@ describe("compare, publish and change visibility", () => {
     render("/settings");
     const row = () => [...document.querySelectorAll("button")].find((b) => b.textContent?.includes("MRI of the lumbar spine"))!;
     expect(row().textContent).toContain("v4 scheduled · Dec 1");
-    expect(row().textContent).toContain("v3 · Active since Jan 1, 2026");
+    expect(row().textContent).toContain("RAD-114 · Effective 01/01/2026 (v3)");
+    expect(row().textContent).toContain("Active");
     expect(row().textContent).not.toContain("Draft");
     act(() => void rulesApi.createDraft(RAD, { actor: tester }));
     expect(row().textContent).toMatch(/Draft/);

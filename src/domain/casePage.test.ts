@@ -56,8 +56,8 @@ describe("case page presentation", () => {
     const item = order("case-3-sulu");
     const panel = getReviewPanel(item.id, "nurse", item);
     const view = presentChecklist(item, panel);
-    expect(caseButtons(item.reasonCode, "coordinator")).toEqual([]);
-    expect(caseButtons(item.reasonCode, "nurse").map((button) => button.label)).toEqual(["Approve for submission", "Cancel order"]);
+    expect(caseButtons(item.reasonCode, "nurse")).toEqual([]);
+    expect(caseButtons(item.reasonCode, "coordinator").map((button) => button.label)).toEqual(["Send draft", "Release slot"]);
     const criteria = view.groups.find((group) => group.title === "Insurer criteria");
     expect(criteria?.items.every((row) => row.kind === "check")).toBe(true);
     expect(criteria?.items.some((row) => row.kind === "check" && row.row.result === "NOT_MET")).toBe(true);

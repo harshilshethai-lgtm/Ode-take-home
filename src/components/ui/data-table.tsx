@@ -8,7 +8,7 @@ export interface Column<T> {
   /** Replaces the text header (e.g. a select-all checkbox). `header` stays as the accessible name. */
   headerCell?: ReactNode;
   align?: "left" | "right";
-  /** Width class on the header cell, e.g. "w-24". */
+  /** Width class ("w-24") or a percentage ("16%"). Percentages keep the table inside the viewport. */
   width?: string;
   /** Allow the cell to wrap. Comfortable tables use this for a name over a caption. */
   wrap?: boolean;
@@ -29,12 +29,12 @@ interface Props<T> {
   className?: string;
 }
 
-const MAX_COLUMNS = 12;
+const MAX_COLUMNS = 8;
 
 /**
  * Hairline dividers, no zebra, no vertical borders, hover bg-hover.
- * Compact rows are 36px. Comfortable rows fit a name and a caption.
- * Selected row: 2px accent left border plus bg-hover. At most 12 columns.
+ * Rows are 36px. A two-line cell may grow the row just enough to fit a caption.
+ * Selected row: 2px accent left border plus bg-hover. At most 8 columns.
  */
 export function DataTable<T>({
   columns,
@@ -52,7 +52,7 @@ export function DataTable<T>({
     throw new Error(`DataTable allows at most ${MAX_COLUMNS} columns (got ${columns.length}).`);
   }
   return (
-    <table className={cn("w-full text-left text-body", comfortable && "group/table", className)}>
+    <table className={cn("w-full text-left text-body group/table", className)}>
       <thead>
         <tr className="border-b border-line">
           {columns.map((c, i) => (
@@ -65,8 +65,9 @@ export function DataTable<T>({
                 i === 0 && (comfortable ? "pl-6" : "pl-4"),
                 i === columns.length - 1 && comfortable && "pr-6",
                 c.align === "right" && "text-right",
-                c.width,
+                c.width && !c.width.endsWith("%") && c.width,
               )}
+              style={c.width?.endsWith("%") ? { width: c.width } : undefined}
             >
               {c.headerCell ?? c.header}
             </th>
@@ -101,7 +102,7 @@ export function DataTable<T>({
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 className={cn(
                   "group border-b border-line transition-colors last:border-b-0 hover:bg-hover",
-                  comfortable ? "align-middle" : "h-9",
+                  comfortable ? "min-h-9 align-middle" : "h-9",
                   onRowClick && "cursor-pointer",
                   selected && "bg-hover",
                   rowClassName?.(row),
@@ -111,13 +112,12 @@ export function DataTable<T>({
                   <td
                     key={c.id}
                     className={cn(
-                      "whitespace-nowrap border-l-2 px-3 align-middle",
-                      comfortable && "py-2",
+                      "h-9 border-l-2 px-3 align-middle",
+                      c.wrap ? "whitespace-normal" : "overflow-hidden whitespace-nowrap",
                       i === 0 && (comfortable ? "pl-6" : "pl-4"),
                       i === columns.length - 1 && comfortable && "pr-6",
                       i === 0 && selected ? "border-accent" : "border-transparent",
                       c.align === "right" && "tabular text-right",
-                      c.wrap && "whitespace-normal",
                     )}
                   >
                     {c.cell(row)}

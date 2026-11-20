@@ -55,6 +55,7 @@ export function PropertyRows({ rows, className }: { rows: PropertyRow[]; classNa
             <span className="min-w-0 text-right text-fg">{r.value}</span>
             {r.assumption && <AssumptionDot />}
           </div>
+          {r.fact && <div className="text-caption text-fg-3">Reads {r.fact}</div>}
           {r.assumption && <div className="text-caption text-fg-2">{r.assumption}</div>}
         </li>
       ))}
@@ -87,7 +88,9 @@ export function VersionItem({ version: x, selected, onSelect, actions }: Version
     <div className={cn("border-l-2", selected ? "border-accent bg-hover" : "border-transparent")}>
       <button type="button" onClick={onSelect} aria-current={selected ? "true" : undefined} className="flex w-full flex-col gap-1 px-4 pt-3 text-left hover:bg-hover">
         <span className="flex items-center gap-2">
-          <span className="tabular text-emph text-fg">v{x.versionNumber}</span>
+          <span className="tabular text-emph text-fg">
+            {x.sourceRevisionLabel ? `${x.sourceRevisionLabel} ` : ""}(v{x.versionNumber})
+          </span>
           <StatusLabel tone={versionTone(x.derivedStatus)}>{label(VERSION_STATUS_LABEL, x.derivedStatus)}</StatusLabel>
           <span className="tabular ml-auto text-caption text-fg-2">{rangeLabel(x)}</span>
         </span>

@@ -7,6 +7,7 @@ import type { PolicyVersion, Property } from "@/domain/rules/types";
 import {
   ACCEPTED_SOURCE_LABEL,
   CHANNEL_LABEL,
+  FACT_KIND_LABEL,
   FAILURE_TYPE_LABEL,
   INCOMPLETE_HANDLING_LABEL,
   PLAN_TYPE_LABEL,
@@ -21,6 +22,8 @@ export interface PropertyRow {
   value: string;
   assumption: string | null;
   checked: boolean;
+  /** Human name of the fact the check reads. Never the raw key. */
+  fact: string | null;
 }
 
 export interface CriterionCard {
@@ -75,7 +78,23 @@ export function formatPropertyValue(p: Pick<Property, "key" | "value" | "unit" |
 }
 
 export function propertyRow(p: Property): PropertyRow {
-  return { key: p.key, label: p.label, value: formatPropertyValue(p), assumption: p.assumption?.trim() || null, checked: !!p.check };
+  return {
+    key: p.key,
+    label: p.label,
+    value: formatPropertyValue(p),
+    assumption: p.assumption?.trim() || null,
+    checked: !!p.check,
+    fact: p.check?.fact ? label(FACT_KIND_LABEL, p.check.fact) : null,
+  };
+}
+
+/** "RAD-114 · Effective 01/01/2026 (v3)". The insurer's revision sits next to the internal version. */
+export function policyVersionLabel(policyId: string, revision: string | null | undefined, versionNumber: number): string {
+  const internal = `(v${versionNumber})`;
+  const rev = revision?.trim();
+  if (rev && policyId) return `${policyId} · ${rev} ${internal}`;
+  if (policyId) return `${policyId} · ${internal}`;
+  return rev ? `${rev} ${internal}` : internal;
 }
 
 export function buildRuleCard(v: PolicyVersion): RuleCard {
@@ -99,8 +118,10 @@ export function buildRuleCard(v: PolicyVersion): RuleCard {
       label: e.displayLabel,
       waives: `Waives ${e.waivesCriterionKeys.map(refOf).join(", ") || "nothing"}`,
       properties: [
-        { key: "triggers", label: "When", value: e.triggers.map(humanizeKey).join(", "), assumption: null, checked: true },
-        ...(e.evaluationMode === "human_review" ? [{ key: "review", label: "Review", value: "A clinician confirms", assumption: null, checked: false }] : []),
+        { key: "triggers", label: "When", value: e.triggers.map(humanizeKey).join(", "), assumption: null, checked: true, fact: null },
+        ...(e.evaluationMode === "human_review"
+          ? [{ key: "review", label: "Review", value: "A clinician confirms", assumption: null, checked: false, fact: null }]
+          : []),
       ],
       excerpt: e.excerpt,
       assumption: e.assumption?.trim() || null,

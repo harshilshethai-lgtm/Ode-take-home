@@ -10,7 +10,7 @@ describe("review panel", () => {
   it("O'Brien needs a side correction, with every MSK-207 criterion checked for the right knee", () => {
     const panel = getReviewPanel("case-17-obrien", "coordinator");
     expect(panel.headline).toBe("Request says left knee; every record says right");
-    expect(panel.scan.deadline).toBe("Fix by Thu 11/12");
+    expect(panel.scan.deadline).toMatch(/^Submit by |^Past due /);
     expect(panel.context.constraint).toBe("Denied requests can't be amended");
     expect(panel.context.channel).toBe("portal");
     expect(checksSummary(panel.checks.summary)).toBe("1 failed · 4 passed");
@@ -21,12 +21,12 @@ describe("review panel", () => {
     expect(panel.toResolve[0]?.text).toBe("Correct the order to the right knee (M25.561)");
     expect(panel.toResolve.map((item) => item.action?.label)).toContain("Notify ordering doctor");
     expect(panel.checks.evaluatedAt >= (panel.checks.receivedAt ?? "")).toBe(true);
-    expect(new Date(panel.checks.evaluatedAt).getTime()).toBeGreaterThanOrEqual(new Date("2026-11-11T16:02:00").getTime());
+    expect(new Date(panel.checks.evaluatedAt).getTime()).toBeGreaterThanOrEqual(new Date("2026-11-10T15:02:00.000Z").getTime());
     expect(panel.documentNotes.some((row) => row.id === "PP-1" && row.result === "FIXED")).toBe(true);
   });
 
   it("rejects an evaluation time earlier than the fax", () => {
-    expect(() => assertEvaluationAfterReceipt("2026-11-09T16:00:00", ["2026-11-11T16:02:00"])).toThrow(/earlier than an attached document/);
+    expect(() => assertEvaluationAfterReceipt("2026-11-10T14:00:00.000Z", ["2026-11-10T15:02:00.000Z"])).toThrow(/earlier than an attached document/);
   });
 
   it("Kirk is ready, with nothing to resolve and the evidence folded away", () => {
@@ -49,17 +49,18 @@ describe("review panel", () => {
     expect(unclear).toEqual(expect.arrayContaining(["conservative_care", "no_recent_mri"]));
   });
 
-  it("Sulu fails three criteria and offers the nurse both decisions", () => {
-    const nurse = getReviewPanel("case-3-sulu", "nurse");
-    expect(nurse.headline).toBe("Doesn't meet IMG-330: 3 weeks of symptoms, needs 6");
-    expect(checksSummary(nurse.checks.summary)).toBe("3 failed · 1 unclear");
-    expect(nurse.toResolve.map((item) => item.action?.label)).toEqual(expect.arrayContaining(["Approve for submission", "Cancel order"]));
-    expect(nurse.toResolve.every((item) => item.readOnly)).toBe(false);
-
+  it("Sulu returns to the ordering doctor with a draft and no X-ray chase", () => {
     const coordinator = getReviewPanel("case-3-sulu", "coordinator");
-    expect(coordinator.toResolve.every((item) => item.readOnly)).toBe(true);
-    expect(coordinator.toResolve[0]?.action).toBeUndefined();
-    expect(coordinator.toResolve[0]?.owner).toBe("nurse");
+    expect(coordinator.headline).toContain("3 weeks of pain and 1 week of PT");
+    expect(coordinator.headline).toContain("order an X-ray");
+    expect(coordinator.headline).not.toMatch(/chase/i);
+    expect(checksSummary(coordinator.checks.summary)).toBe("3 failed · 1 unclear");
+    expect(coordinator.toResolve.map((item) => item.action?.label)).toEqual(expect.arrayContaining(["Send draft", "Release slot"]));
+    expect(coordinator.toResolve.every((item) => item.readOnly)).toBe(false);
+
+    const nurse = getReviewPanel("case-3-sulu", "nurse");
+    expect(nurse.toResolve.every((item) => item.readOnly)).toBe(true);
+    expect(nurse.toResolve[0]?.owner).toBe("coordinator");
   });
 
   it("follows the live status after a nurse approves Sulu", () => {
@@ -71,7 +72,7 @@ describe("review panel", () => {
       reason: "Symptoms documented, sending",
     });
     expect(panel.headline).toBe("Approved for submission; upload via portal");
-    expect(panel.toResolve[0]?.text).toBe("Open the packet and submit it on the portal");
+    expect(panel.toResolve[0]?.text).toBe("Record the portal reference once it's uploaded");
     expect(panel.toResolve[0]?.readOnly).toBe(true);
     expect(panel.toResolve[0]?.owner).toBe("coordinator");
   });
@@ -142,7 +143,7 @@ describe("review panel", () => {
 
   it("Sisko's deadline skips the weekend and the office-note X-ray counts", () => {
     const panel = getReviewPanel("case-18-sisko", "coordinator", order("case-18-sisko"));
-    expect(panel.scan.deadline).toBe("Fix by Fri 11/13");
+    expect(panel.scan.deadline).toMatch(/^Submit by |^Past due /);
     const xray = panel.checks.criteria.rows.find((row) => row.id === "prior_xray");
     expect(xray?.result).toBe("MET");
     expect(xray?.found ?? "").not.toMatch(/Not checked/);

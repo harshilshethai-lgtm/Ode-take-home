@@ -89,6 +89,8 @@ export interface MetricDef extends MetricSpec {
   /** Name on the value stack. Absent when the metric is not a dollar lever. */
   lever: string | null;
   role: "north" | "card" | "guardrail";
+  /** Hours from `value` are nurse time, not a generic clock. */
+  hoursLabel?: "nurse";
   value: (input: ValueInput) => ValueOutput;
 }
 
@@ -104,6 +106,11 @@ export const SOURCE_LABEL: Record<BaselineSource, string> = {
 };
 
 export const NEEDS_DATA_LABEL = "Needs Halcyon data";
+
+/** Brief: a nurse spends this long on one review. */
+export const NURSE_REVIEW_MINUTES = 18;
+/** Brief: nurse time on one denial. Priced as nurse hours, not dollars. */
+export const DENIAL_MINUTES = 25;
 
 const none: ValueOutput = { dollars: null, hours: null };
 
@@ -146,15 +153,14 @@ export const METRICS: { [K in MetricId]: MetricDef } = {
     targetDetail: "Under 30%.",
     direction: "lower",
     unit: "percent",
-    whyItMatters:
-      "Hours saved per month = requests × 18/60 × (1 − rate). Dollars per year = those hours × 12 × the nurse cost.",
+    whyItMatters: `Hours saved per month = requests × ${NURSE_REVIEW_MINUTES}/60 × (1 − rate). Dollars per year = those hours × 12 × the nurse cost.`,
     series: "nurseTouch",
     lagNote: null,
     lag: null,
     lever: "Nurse time",
     role: "card",
     value: ({ current, requests, assumptions }) => {
-      const hours = requests * (18 / 60) * (1 - current);
+      const hours = requests * (NURSE_REVIEW_MINUTES / 60) * (1 - current);
       return {
         hours,
         dollars: assumptions.nurseCostPerHour == null ? null : hours * assumptions.nurseCostPerHour,
@@ -253,24 +259,24 @@ export const METRICS: { [K in MetricId]: MetricDef } = {
     baselineSource: "brief",
     baselineMode: "fixed",
     baseline: 0.11,
-    baselineDetail: "25 min of nurse and doctor time per denial.",
+    baselineDetail: "11% of decided requests. 25 min of nurse time each.",
     targetMode: "value",
     target: 0.11,
     targetDetail: "Below 11%.",
     direction: "lower",
     unit: "percent",
-    whyItMatters:
-      "Hours saved per month = requests × (baseline − current) × 25/60. Insurer decisions take days, so the latest weeks are incomplete.",
+    whyItMatters: `Nurse hours per year = monthly requests × (11% − current) × ${DENIAL_MINUTES} min. Insurer decisions take days, so the latest weeks are incomplete.`,
     series: "denialRate",
     lagNote: "Latest weeks are incomplete.",
     lag: "denialRate",
     band: { low: "matchedBaselineLow", high: "matchedBaselineHigh", label: "Matched baseline" },
     lever: "Denials avoided",
     role: "card",
+    hoursLabel: "nurse",
     value: ({ current, baseline, requests }) => {
       if (baseline == null) return none;
-      // Nurse and doctor time share one clock. There is no blended cost, so this stays in hours.
-      return { dollars: null, hours: requests * (baseline - current) * (25 / 60) };
+      // 11% denials × 25 min each, as the hours avoided versus that baseline. No blended dollar rate.
+      return { dollars: null, hours: requests * (baseline - current) * (DENIAL_MINUTES / 60) };
     },
   },
   spot_check: {

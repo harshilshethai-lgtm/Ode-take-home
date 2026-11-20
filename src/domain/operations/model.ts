@@ -1,10 +1,10 @@
 import { DEMO_NOW } from "@/data/orders";
+import { demoDateKey } from "@/lib/demoClock";
 import { METRICS, OPS_METRICS, type Direction, type MetricSpec } from "@/data/impact/metrics";
 import {
   DONE_PARTS,
   HOSPITAL,
   OWNERS,
-  REASON_LABEL,
   REASON_ORDER,
   autonomyFor,
   queueOwner,
@@ -15,6 +15,8 @@ import { MATCHED_BASELINE, THROUGHPUT, type ThroughputCase } from "@/data/operat
 import { INSURER_TURNAROUND_HOURS } from "@/domain/timeRisk";
 import { isClosed, STATUSES, type StatusId } from "@/domain/statuses";
 import type { Order } from "@/domain/types";
+import { reasonChip } from "@/domain/priorAuth/reasons";
+import type { ReasonCode } from "@/domain/priorAuth/types";
 import { isWaitingOnDocuments } from "@/domain/priorAuth/render";
 import { computeTimeRisk } from "@/domain/timeRisk";
 import { ageBucket, businessHoursBetween, addBusinessHours, fmtBusiness } from "@/domain/operations/time";
@@ -43,7 +45,7 @@ export function scopeOptions(orders: Order[]): { hospitals: string[]; insurers: 
 }
 
 function sameDay(a: Date, b: Date): boolean {
-  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
+  return demoDateKey(a) === demoDateKey(b);
 }
 
 function orderInScope(order: Order, scope: OperationsScope): boolean {
@@ -244,7 +246,7 @@ function dueText(deadline: Date | null, now: Date): string {
   const hours = businessHoursBetween(past ? deadline : now, past ? now : deadline);
   const body = fmtBusiness(hours);
   if (body === "0m") return "now";
-  return past ? `${body} ago` : `in ${body}`;
+  return past ? `Past due by ${body}` : `in ${body}`;
 }
 
 function ownerName(status: StatusId, autonomy: Autonomy): string {
@@ -290,7 +292,7 @@ function queueRows(orders: Order[], scope: OperationsScope, now: Date): QueueRow
     const buckets: [number, number, number] = [0, 0, 0];
     let oldest: number | null = null;
     let pastDue = 0;
-    const reasonCounts = new Map<string, number>();
+    const reasonCounts = new Map<ReasonCode, number>();
     for (const order of rows) {
       const age = businessHoursBetween(new Date(order.statusSince), now);
       buckets[ageBucket(age)] += 1;
@@ -298,10 +300,15 @@ function queueRows(orders: Order[], scope: OperationsScope, now: Date): QueueRow
       if (isPastDue(order, now)) pastDue += 1;
       if (order.reasonCode) reasonCounts.set(order.reasonCode, (reasonCounts.get(order.reasonCode) ?? 0) + 1);
     }
-    const reasons = REASON_ORDER.filter((code) => REASON_LABEL[code] && (reasonCounts.get(code) ?? 0) > 0).map((code) => ({
-      label: REASON_LABEL[code]!,
-      count: reasonCounts.get(code)!,
-    }));
+    const chipOrder = new Map(REASON_ORDER.map((code, index) => [reasonChip(code), index]));
+    const byChip = new Map<string, number>();
+    for (const [code, count] of reasonCounts) {
+      const chip = reasonChip(code);
+      byChip.set(chip, (byChip.get(chip) ?? 0) + count);
+    }
+    const reasons = [...byChip.entries()]
+      .map(([label, count]) => ({ label, count }))
+      .sort((a, b) => (chipOrder.get(a.label) ?? 99) - (chipOrder.get(b.label) ?? 99) || b.count - a.count);
     return {
       id: owner.id,
       name: owner.name,

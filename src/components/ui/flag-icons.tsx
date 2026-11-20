@@ -27,7 +27,7 @@ const FLAG_ICON: Record<FlagId, LucideIcon> = {
 };
 
 // Flags are status: red for blocking danger, amber for warnings.
-const TONE = { danger: "text-red-500", warn: "text-amber-500" } as const;
+const TONE = { danger: "text-bad", warn: "text-warning" } as const;
 
 export function FlagIcon({ flag }: { flag: Flag }) {
   const def = FLAG_DEFS[flag.id];
@@ -53,7 +53,9 @@ export function FlagIcons({ flags, max = 2 }: { flags: Flag[]; max?: number }) {
       ))}
       {rest.length > 0 && (
         <Tip content={rest.map((f) => FLAG_DEFS[f.id].label).join(", ")}>
-          <span className="text-caption text-fg-2">+{rest.length}</span>
+          <span className="text-caption text-fg-2" aria-label={`${rest.length} more: ${rest.map((f) => FLAG_DEFS[f.id].label).join(", ")}`}>
+            +{rest.length}
+          </span>
         </Tip>
       )}
     </span>

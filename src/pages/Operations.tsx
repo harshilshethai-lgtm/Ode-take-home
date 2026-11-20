@@ -58,8 +58,8 @@ export default function Operations() {
       id: "due",
       header: "Due",
       cell: (row) => (
-        <span className="inline-flex items-center gap-1 tabular">
-          {row.slotAtRisk && <span className="text-bad">!</span>}
+        <span className={cn("inline-flex items-center gap-1 tabular", row.pastDue && "text-bad")}>
+          {row.slotAtRisk && <span>!</span>}
           {row.dueText}
         </span>
       ),
@@ -171,6 +171,7 @@ export default function Operations() {
         <h2 className="px-4 pt-4 text-section text-fg">By insurer</h2>
         <div className="overflow-x-auto">
           <DataTable
+            comfortable
             columns={insurerColumns()}
             rows={model.byInsurer}
             getKey={(row) => row.insurer}
@@ -244,8 +245,15 @@ function QueueRowView({ row, scale }: { row: QueueRowModel; scale: number }) {
         </div>
       </div>
       {row.reasons.length > 0 && (
-        <div className="mt-1 text-caption text-fg-3">
-          {row.reasons.map((reason) => `${reason.label} ${reason.count}`).join(" · ")}
+        <div className="mt-1 flex flex-wrap gap-x-2 text-caption text-fg-3">
+          {row.reasons.map((reason, index) => (
+            <span key={reason.label}>
+              {index > 0 && <span className="mr-2">·</span>}
+              <Link to={reasonHref(row.id, reason.label)} className="hover:text-fg">
+                {reason.label} {reason.count}
+              </Link>
+            </span>
+          ))}
         </div>
       )}
     </div>
@@ -254,7 +262,29 @@ function QueueRowView({ row, scale }: { row: QueueRowModel; scale: number }) {
 
 function insurerColumns(): Column<ReturnType<typeof buildOperations>["byInsurer"][number]>[] {
   return [
-    { id: "insurer", header: "Insurer", cell: (row) => <span className="text-fg">{row.insurer}</span> },
+    {
+      id: "insurer",
+      header: "Insurer",
+      wrap: true,
+      cell: (row) => {
+        const above =
+          row.aiReadyDenial != null && row.matchedBaseline != null && row.aiReadyDenial > row.matchedBaseline;
+        return (
+          <div className="min-w-0">
+            <div className="text-fg">{row.insurer}</div>
+            {above && (
+              <Link
+                to={`/?insurer=${encodeURIComponent(row.insurer)}`}
+                className="mt-1 inline-flex items-center gap-1 text-caption text-fg-2"
+              >
+                <StatusDot tone="blocked" />
+                Above baseline · autonomy held at {AUTONOMY_LABEL[row.autonomy]}
+              </Link>
+            )}
+          </div>
+        );
+      },
+    },
     {
       id: "autonomy",
       header: "Autonomy",
@@ -315,6 +345,17 @@ function insurerColumns(): Column<ReturnType<typeof buildOperations>["byInsurer"
       cell: (row) => <span className="tabular">{row.open}</span>,
     },
   ];
+}
+
+const REASON_TAB: Record<QueueRowModel["id"], string> = {
+  ai: "in_flight",
+  coordinator: "admin",
+  nurse: "clinical",
+  insurer: "with_insurer",
+};
+
+function reasonHref(owner: QueueRowModel["id"], label: string): string {
+  return `/?tab=${REASON_TAB[owner]}&reason=${encodeURIComponent(label)}`;
 }
 
 function baselineFor(metric: MetricSpec): number | null {

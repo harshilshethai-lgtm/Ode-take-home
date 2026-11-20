@@ -63,6 +63,11 @@ export interface BucketInput {
   routingPolicy?: RoutingPolicy;
   routingContext?: RoutingContext;
   attachmentCount?: number;
+  /**
+   * Member ID known from the packet or Epic.
+   * Undefined means the check was not run. An empty string means neither source had one.
+   */
+  memberId?: string | null;
 }
 
 export interface BucketDecision {
@@ -214,7 +219,23 @@ export function bucketRun(input: BucketInput): BucketDecision {
 
   const clinical = criteria.filter((c) => c.result === "NOT_MET" && c.failureClass === "clinical");
   const gaps = documentGaps(criteria, input.pageIssues ?? []);
-  if (clinical.length > 0) {
+  if (returnToProvider(clinical, gaps)) {
+    candidates.push({
+      rank: 5,
+      rule: "5",
+      status: "NEEDS_ADMIN_REVIEW",
+      reason: "RETURN_TO_PROVIDER",
+      step: null,
+      issue: true,
+      checkIds: clinical.map((c) => c.criterionId),
+      detail: {
+        failures: clinical.map(criterionLine).join("; "),
+        doctor: "the ordering doctor",
+        slot: "the scan slot",
+        policy: input.policyId ?? "the policy",
+      },
+    });
+  } else if (clinical.length > 0) {
     candidates.push({
       rank: 5,
       rule: "5",
@@ -346,6 +367,18 @@ function readyCandidate(input: BucketInput, criteria: CriterionResult[], thresho
       detail: { insurer: input.insurer ?? "The insurer", error: input.submissionError ?? "the request was rejected", n: failures },
     };
   }
+  if (input.channel === "api" && input.memberId !== undefined && !memberIdAllowsAutoSubmit(input.memberId)) {
+    return {
+      rank: 7,
+      rule: "7",
+      status: "NEEDS_ADMIN_REVIEW",
+      reason: "MEMBER_ID_MISSING",
+      step: null,
+      issue: true,
+      checkIds: [],
+      detail: { insurer: input.insurer ?? "the insurer" },
+    };
+  }
   if (input.channel === "api") {
     return {
       rank: 7,
@@ -454,7 +487,23 @@ function normalizeCriteria(criteria: CriterionResult[], fallbackThreshold: numbe
   });
 }
 
-function documentGaps(criteria: CriterionResult[], pageIssues: PageIssue[]): { checkId: string; line: string; document: string; source: string }[] {
+/** A clear duration or treatment miss that no arriving document can change goes back to the ordering doctor. */
+export function returnToProvider(clinical: CriterionResult[], gaps: { pendingDocument?: CriterionResult["pendingDocument"] }[]): boolean {
+  if (clinical.length === 0) return false;
+  const irreversible = clinical.every(
+    (item) =>
+      (item.clinicalKind === "duration" || item.clinicalKind === "treatment_length") && item.documentCouldChange !== true,
+  );
+  return irreversible && gaps.length === 0;
+}
+
+/** Auto-submit needs a member ID from the packet or from Epic. An unchecked ID (undefined) does not block older callers. */
+export function memberIdAllowsAutoSubmit(memberId: string | null | undefined): boolean {
+  if (memberId === undefined) return true;
+  return (memberId ?? "").trim().length > 0;
+}
+
+function documentGaps(criteria: CriterionResult[], pageIssues: PageIssue[]): { checkId: string; line: string; document: string; source: string; pendingDocument?: CriterionResult["pendingDocument"] }[] {
   const fromPages = pageIssues
     .filter((page) => page.holdsRequiredEvidence)
     .map((page) => ({
@@ -464,12 +513,14 @@ function documentGaps(criteria: CriterionResult[], pageIssues: PageIssue[]): { c
       source: "the sender",
     }));
   const fromCriteria = criteria
+    .filter((c) => c.pendingDocument !== "never_performed")
     .filter((c) => c.result === "UNCLEAR" || (c.result === "NOT_MET" && c.failureClass === "documents"))
     .map((c) => ({
       checkId: c.criterionId,
       line: criterionLine(c),
       document: c.label ?? c.criterionId,
       source: "the sender",
+      pendingDocument: c.pendingDocument,
     }));
   return [...fromPages, ...fromCriteria];
 }

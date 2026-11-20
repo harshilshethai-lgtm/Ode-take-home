@@ -13,6 +13,7 @@ const arg = (name: string, fallback: string) => {
 
 const tag = arg("tag", "after");
 const base = arg("url", "http://localhost:5173");
+const only = arg("only", "").split(",").filter(Boolean);
 const outDir = new URL("../screenshots/", import.meta.url).pathname;
 
 const SCREENS: { name: string; path: string; prepare?: (page: import("playwright").Page) => Promise<void> }[] = [
@@ -24,6 +25,7 @@ const SCREENS: { name: string; path: string; prepare?: (page: import("playwright
       await page.getByRole("tab", { name: /Nurse/ }).click();
     },
   },
+  { name: "worklist-insurer", path: "/?tab=with_insurer" },
   { name: "settings-rules", path: "/settings" },
   {
     name: "settings-rules-expanded",
@@ -45,7 +47,13 @@ const SCREENS: { name: string; path: string; prepare?: (page: import("playwright
   },
   { name: "case-scott", path: "/case/case-2-scott" },
   { name: "case-sulu", path: "/case/case-3-sulu" },
+  { name: "case-portal", path: "/case/case-5-chakotay" },
   { name: "case-odo", path: "/case/case-20-odo" },
+];
+
+const VIEWPORTS = [
+  { name: "1440", width: 1440, height: 900 },
+  { name: "1024", width: 1024, height: 768 },
 ];
 
 mkdirSync(outDir, { recursive: true });
@@ -53,21 +61,24 @@ const browser = await chromium.launch({ channel: "chrome" });
 
 for (const scheme of ["light", "dark"] as const) {
   if (tag === "before" && scheme === "dark") continue; // dark mode did not exist before the retrofit
-  const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, colorScheme: scheme });
-  const page = await context.newPage();
-  for (const s of SCREENS) {
-    await page.goto(base + s.path);
-    await page.waitForLoadState("networkidle");
-    if (s.path.startsWith("/case")) {
-      await page.locator("canvas, :text('No packet')").first().waitFor({ timeout: 8000 }).catch(() => {});
+  for (const viewport of VIEWPORTS) {
+    if (tag === "before" && viewport.name !== "1440") continue;
+    const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, colorScheme: scheme });
+    const page = await context.newPage();
+    for (const s of SCREENS.filter((screen) => only.length === 0 || only.includes(screen.name))) {
+      await page.goto(base + s.path);
+      await page.waitForLoadState("networkidle");
+      if (s.path.startsWith("/case")) {
+        await page.locator("canvas, :text('No packet')").first().waitFor({ timeout: 8000 }).catch(() => {});
+      }
+      await s.prepare?.(page);
+      await page.waitForTimeout(300);
+      const file = `${outDir}${tag}-${s.name}-${viewport.name}-${scheme}.png`;
+      await page.screenshot({ path: file });
+      console.log(file);
     }
-    await s.prepare?.(page);
-    await page.waitForTimeout(300);
-    const file = `${outDir}${tag}-${s.name}-${scheme}.png`;
-    await page.screenshot({ path: file });
-    console.log(file);
+    await context.close();
   }
-  await context.close();
 }
 
 await browser.close();

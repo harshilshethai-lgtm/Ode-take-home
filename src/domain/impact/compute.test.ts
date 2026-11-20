@@ -115,6 +115,17 @@ describe("value math", () => {
     expect(week12).toBe(0);
   });
 
+  it("sets the run rate to the sum of the card dollar lines", () => {
+    const model = buildImpactModel(WEEKS, "toDate", "all", DEFAULT_ASSUMPTIONS);
+    const dollars = model.cards.map((card) => card.annualDollars).filter((n): n is number => n != null);
+    expect(dollars.length).toBeGreaterThan(0);
+    expect(model.runRate).toBeCloseTo(dollars.reduce((sum, n) => sum + n, 0));
+    expect(model.runRateNote).toBe("At current rates");
+    const denials = model.cards.find((card) => card.metric.id === "denial_rate");
+    expect(denials?.annualDollars).toBeNull();
+    expect(denials?.annualLine).toMatch(/nurse hr\/yr/);
+  });
+
   it("scales the run rate with monthly requests", () => {
     const base = buildImpactModel(WEEKS, "toDate", "all", DEFAULT_ASSUMPTIONS);
     const doubled = buildImpactModel(WEEKS, "toDate", "all", { ...DEFAULT_ASSUMPTIONS, requestsPerMonth: 24000 });

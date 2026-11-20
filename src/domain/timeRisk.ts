@@ -2,7 +2,11 @@
 // "At risk when the scan is inside the insurer's turnaround + 1 day."
 // Slot at risk is the stronger state: the insurer cannot answer in time (or the 24h scan watch has fired).
 
+import { medianDecisionHours } from "@/data/operations/throughput";
 import { isClosed, type StatusId } from "./statuses";
+
+const SUBMIT_BUFFER_HOURS = 4;
+const BLOCKER_WINDOW_HOURS = 48;
 
 export type TimeRisk = "on_track" | "at_risk" | "slot_at_risk" | "none";
 
@@ -82,6 +86,31 @@ export function subtractBusinessDays(day: Date, days: number): Date {
 
 export function hoursUntil(scanAt: Date, now: Date): number {
   return (scanAt.getTime() - now.getTime()) / 36e5;
+}
+
+/** Latest moment to submit so the insurer's median decision still lands 4 hours before the scan. */
+export function submitByAt(scanAt: Date, insurer: string | null): Date {
+  const median = medianDecisionHours(insurer);
+  return new Date(scanAt.getTime() - (median + SUBMIT_BUFFER_HOURS) * 36e5);
+}
+
+/**
+ * At risk when the clock is past submit-by, or the case still has open blockers
+ * and submit-by is inside 48 hours.
+ */
+export function isSubmitAtRisk(args: {
+  scanAt: Date | null;
+  insurer: string | null;
+  status: StatusId;
+  now: Date;
+}): boolean {
+  const { scanAt, insurer, status, now } = args;
+  if (!scanAt || isClosed(status)) return false;
+  const submitBy = submitByAt(scanAt, insurer);
+  if (now.getTime() > submitBy.getTime()) return true;
+  const openBlockers = status === "needs_admin_review" || status === "needs_clinical_review";
+  const hoursToSubmit = (submitBy.getTime() - now.getTime()) / 36e5;
+  return openBlockers && hoursToSubmit < BLOCKER_WINDOW_HOURS;
 }
 
 /**

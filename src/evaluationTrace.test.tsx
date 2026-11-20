@@ -130,7 +130,7 @@ describe("case view", () => {
   it("says which version the check used, linking to that exact version", () => {
     const order = unsubmitted()!;
     render(`/case/${order.id}`);
-    const link = [...document.querySelectorAll("a")].find((a) => a.textContent === "Checked against Federation Health RAD-114 v3");
+    const link = [...document.querySelectorAll("a")].find((a) => a.textContent === "RAD-114 · Effective 01/01/2026 (v3)");
     expect(link, text().slice(0, 400)).toBeTruthy();
     expect(link!.getAttribute("href")).toBe("/settings?policy=pol_rad114&v=ver_rad114_3");
     expect(document.querySelector('[role="status"]')).toBeNull();
@@ -146,7 +146,7 @@ describe("case view", () => {
     expect(banner.textContent?.match(SNAKE)?.[0]).toBeUndefined();
     click([...banner.querySelectorAll("button")].find((b) => b.textContent?.startsWith("Re-run")));
     expect(document.querySelector('[role="status"]')).toBeNull();
-    expect(text()).toContain("Checked against Federation Health RAD-114 v4");
+    expect(text()).toContain("RAD-114 · Effective 01/01/2026 (v4)");
   });
 });
 
@@ -167,7 +167,7 @@ describe("evaluation page", () => {
 describe("Operations queue", () => {
   const goOperations = () => {
     render("/settings");
-    click([...document.querySelectorAll('nav[aria-label="Settings sections"] button')].find((b) => b.textContent === "Operations"));
+    click([...document.querySelectorAll('nav[aria-label="Settings sections"] a')].find((b) => b.textContent === "Operations"));
   };
 
   it("is empty while every check is current", () => {

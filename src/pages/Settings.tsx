@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { Link, useLocation } from "react-router-dom";
 import { Card, ExpandRow } from "@/components/ui/card";
 import { PageTitle } from "@/components/ui/page-title";
 import { PropertyList } from "@/components/ui/property-list";
@@ -9,14 +9,21 @@ import { cn } from "@/lib/cn";
 
 type SectionId = "rules" | "handoff" | "operations";
 
-const SECTIONS: { id: SectionId; label: string }[] = [
-  { id: "rules", label: "Rule library" },
-  { id: "handoff", label: "Handoff" },
-  { id: "operations", label: "Operations" },
+const SECTIONS: { id: SectionId; label: string; to: string }[] = [
+  { id: "rules", label: "Rule library", to: "/settings" },
+  { id: "handoff", label: "Handoff", to: "/settings/handoff" },
+  { id: "operations", label: "Operations", to: "/settings/operations" },
 ];
 
+function sectionFromPath(pathname: string): SectionId {
+  if (pathname.startsWith("/settings/handoff")) return "handoff";
+  if (pathname.startsWith("/settings/operations")) return "operations";
+  return "rules";
+}
+
 export default function Settings() {
-  const [section, setSection] = useState<SectionId>("rules");
+  const { pathname } = useLocation();
+  const section = sectionFromPath(pathname);
 
   return (
     <main className="mx-auto w-full max-w-page p-6">
@@ -27,17 +34,17 @@ export default function Settings() {
       <div className="grid grid-cols-settings gap-6">
         <nav aria-label="Settings sections" className="flex flex-col gap-1">
           {SECTIONS.map((s) => (
-            <button
+            <Link
               key={s.id}
-              onClick={() => setSection(s.id)}
+              to={s.to}
               aria-current={section === s.id ? "page" : undefined}
               className={cn(
-                "h-8 rounded-md px-2 text-left text-body transition-colors",
+                "flex h-8 items-center rounded-md px-2 text-left text-body transition-colors",
                 section === s.id ? "bg-hover font-medium text-accent-fg" : "text-label hover:bg-hover hover:text-fg",
               )}
             >
               {s.label}
-            </button>
+            </Link>
           ))}
         </nav>
 

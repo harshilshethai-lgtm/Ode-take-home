@@ -2,17 +2,40 @@ import type { PDFDocumentProxy } from "pdfjs-dist";
 import { ChevronLeft, ChevronRight, Minus, Plus } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
-import { MenuItem, Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import type { CaseDocument } from "@/domain/caseRecord";
+import { Tip } from "@/components/ui/tooltip";
+import type { CaseDocument, ExtractRow } from "@/domain/caseRecord";
+import { sourceDocumentUrl } from "@/lib/sourceDocs";
+import { cn } from "@/lib/cn";
+import {
+  boxForQuote,
+  declaredPages,
+  missingCopy,
+  pageLabel,
+  pageSlots,
+  readZoom,
+  sectionText,
+  slotForTarget,
+  stepZoom,
+  viewerSections,
+  writeZoom,
+  type NormBox,
+  type PolicyAttachment,
+  type ViewerSection,
+  type ZoomChoice,
+} from "./packetView";
 
 export interface OpenCite {
   docId: string;
   page: number;
   quote?: string;
+  /** Fax page, including a page that has no PDF image. */
+  faxPage?: number;
 }
 
 interface Props {
   documents: CaseDocument[];
+  extracted: Pick<ExtractRow, "section" | "cite">[];
+  policy: PolicyAttachment | null;
   urls: Record<CaseDocument["file"], string>;
   target: OpenCite | null;
   onTarget: (next: OpenCite) => void;
@@ -26,59 +49,241 @@ function canPaint(): boolean {
   }
 }
 
-/** Right pane: one PDF at a time, page controls, and a box around the open citation. */
-export function DocumentPane({ documents, urls, target, onTarget }: Props) {
-  const active = documents.find((d) => d.id === target?.docId) ?? documents[0];
-  const page = target?.page ?? active?.initialPage ?? 1;
-  const quote = target?.quote;
-  const index = active ? documents.findIndex((d) => d.id === active.id) : -1;
+const isTyping = (target: EventTarget | null) =>
+  target instanceof HTMLElement && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
 
-  if (!active) {
-    return (
-      <div className="flex h-full items-center justify-center text-body text-fg-2">No packet on this row</div>
-    );
+/** Right pane: one PDF at a time, page controls, and a box around the open citation. */
+export function DocumentPane({ documents, extracted, policy, urls, target, onTarget }: Props) {
+  const packet = documents[0];
+  const showingPolicy = target?.docId === "policy" && !!policy;
+  const active = showingPolicy ? null : (documents.find((doc) => doc.id === target?.docId) ?? packet);
+  const policyUrl = policy ? (sourceDocumentUrl(policy.source)?.split("#")[0] ?? null) : null;
+  const url = showingPolicy ? policyUrl : active ? urls[active.file] : null;
+  const sections = packet ? viewerSections(packet.file, packet.title, extracted) : [];
+  const [pdfCount, setPdfCount] = useState(0);
+  const [choice, setChoice] = useState<ZoomChoice>(readZoom);
+  const fitRef = useRef({ width: 1, page: 1 });
+
+  useEffect(() => {
+    writeZoom(choice);
+  }, [choice]);
+
+  useEffect(() => {
+    setPdfCount(0);
+  }, [url]);
+
+  if (!packet || !url) {
+    return <div className="flex h-full items-center justify-center text-body text-fg-2">No packet on this row</div>;
   }
 
-  const go = (doc: CaseDocument, nextPage: number, nextQuote?: string) =>
-    onTarget({ docId: doc.id, page: nextPage, quote: nextQuote });
+  const file = showingPolicy ? undefined : active?.file;
+  const title = showingPolicy ? "Policy" : active?.title;
+  const slots = pageSlots(file, showingPolicy ? undefined : title, pdfCount);
+  const declared = declaredPages(file, pdfCount);
+  const index = slotForTarget(slots, showingPolicy ? { page: target?.page } : target);
+  let slot = slots[index] ?? slots[0];
+  // Until the PDF reports its length, still show the page a citation asked for.
+  if (!showingPolicy && target?.page && pdfCount === 0 && slot?.pdfPage !== target.page && target.faxPage == null) {
+    slot = { faxPage: title === "Fax" ? target.page : null, pdfPage: target.page };
+  }
+  const quote = slot?.missing ? undefined : target?.quote;
+
+  const choose = (next: ZoomChoice) => setChoice(next);
+  const zoomBy = (direction: 1 | -1) => {
+    const base = choice.mode === "custom" ? choice.scale : choice.mode === "page" ? fitRef.current.page : fitRef.current.width;
+    choose({ mode: "custom", scale: stepZoom(base, direction) });
+  };
+  const goSlot = (nextIndex: number) => {
+    const next = slots[nextIndex];
+    if (!next) return;
+    if (showingPolicy && policy) {
+      onTarget({ docId: "policy", page: next.pdfPage ?? policy.page });
+      return;
+    }
+    if (!active) return;
+    onTarget({
+      docId: active.id,
+      page: next.pdfPage ?? 0,
+      ...(next.faxPage != null ? { faxPage: next.faxPage } : {}),
+    });
+  };
+  const openSection = (section: ViewerSection) => {
+    if (!packet) return;
+    onTarget({
+      docId: packet.id,
+      page: section.pdfPage ?? 0,
+      ...(section.faxPage != null ? { faxPage: section.faxPage } : {}),
+    });
+  };
+  const openPolicy = () => {
+    if (!policy) return;
+    onTarget({ docId: "policy", page: policy.page });
+  };
+
+  const currentPage = slot?.faxPage ?? slot?.pdfPage ?? null;
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-sidebar">
-      <div className="flex h-12 shrink-0 items-center gap-1 border-b border-line bg-panel px-2">
-        <Button
-          variant="ghost"
-          aria-label="Previous file"
-          disabled={index <= 0}
-          onClick={() => go(documents[index - 1], documents[index - 1].initialPage)}
-        >
+      <div className="flex min-h-12 shrink-0 flex-wrap items-center gap-x-2 gap-y-1 border-b border-line bg-panel px-2 py-2">
+        <span className="shrink-0 text-body text-fg">{packet.title}</span>
+        {sections.map((section) => {
+          const selected = !showingPolicy && currentPage != null && currentPage >= section.start && currentPage <= section.end;
+          return (
+            <span key={section.id} className="flex shrink-0 items-center gap-2">
+              <span className="text-caption text-fg-3" aria-hidden="true">·</span>
+              <button
+                type="button"
+                className={cn("shrink-0 text-caption", selected ? "font-medium text-fg" : section.missing ? "text-fg-3" : "text-fg-2 hover:text-fg")}
+                aria-current={selected ? "page" : undefined}
+                onClick={() => openSection(section)}
+              >
+                {sectionText(section)}
+              </button>
+            </span>
+          );
+        })}
+        {policy && (
+          <span className="flex shrink-0 items-center gap-2">
+            <span className="text-caption text-fg-3" aria-hidden="true">·</span>
+            <button
+              type="button"
+              className={cn("inline-flex h-7 shrink-0 items-center gap-1 rounded-md px-1", showingPolicy && "bg-hover")}
+              aria-current={showingPolicy ? "page" : undefined}
+              onClick={openPolicy}
+            >
+              <span className="rounded-md bg-chip px-1 text-caption text-chip-fg">Policy</span>
+              <span className="text-caption text-fg">{policy.title}</span>
+            </button>
+          </span>
+        )}
+      </div>
+      <ViewerBody
+        url={url}
+        file={file}
+        page={slot?.pdfPage ?? null}
+        quote={quote}
+        label={slot ? pageLabel(slot, declared, pdfCount) : ""}
+        missing={slot ? missingCopy(slot) : null}
+        canPrev={index > 0}
+        canNext={index < slots.length - 1}
+        onPrev={() => goSlot(index - 1)}
+        onNext={() => goSlot(index + 1)}
+        choice={choice}
+        onChoice={choose}
+        onZoom={zoomBy}
+        fitRef={fitRef}
+        onCount={setPdfCount}
+      />
+    </div>
+  );
+}
+
+function ViewerBody({
+  url,
+  file,
+  page,
+  quote,
+  label,
+  missing,
+  canPrev,
+  canNext,
+  onPrev,
+  onNext,
+  choice,
+  onChoice,
+  onZoom,
+  fitRef,
+  onCount,
+}: {
+  url: string;
+  file?: string;
+  page: number | null;
+  quote?: string;
+  label: string;
+  missing: string | null;
+  canPrev: boolean;
+  canNext: boolean;
+  onPrev: () => void;
+  onNext: () => void;
+  choice: ZoomChoice;
+  onChoice: (next: ZoomChoice) => void;
+  onZoom: (direction: 1 | -1) => void;
+  fitRef: { current: { width: number; page: number } };
+  onCount: (count: number) => void;
+}) {
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.metaKey || event.ctrlKey || event.altKey || isTyping(event.target)) return;
+      if (document.querySelector("[role=dialog]")) return;
+      if (event.key === "[") {
+        event.preventDefault();
+        if (canPrev) onPrev();
+      } else if (event.key === "]") {
+        event.preventDefault();
+        if (canNext) onNext();
+      } else if (event.key === "+" || event.key === "=") {
+        event.preventDefault();
+        onZoom(1);
+      } else if (event.key === "-" || event.key === "_" || event.key === "−") {
+        event.preventDefault();
+        onZoom(-1);
+      } else if (event.key === "f" || event.key === "F") {
+        event.preventDefault();
+        onChoice({ mode: "width", scale: 1 });
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [canNext, canPrev, onChoice, onNext, onPrev, onZoom]);
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-8 shrink-0 items-center gap-1 overflow-x-auto px-2">
+        <Button variant="ghost" aria-label="Previous page" disabled={!canPrev} onClick={onPrev}>
           <ChevronLeft size={16} />
         </Button>
-        <Button
-          variant="ghost"
-          aria-label="Next file"
-          disabled={index >= documents.length - 1}
-          onClick={() => go(documents[index + 1], documents[index + 1].initialPage)}
-        >
+        <span className="tabular px-1 text-caption text-fg-2">{label}</span>
+        <Button variant="ghost" aria-label="Next page" disabled={!canNext} onClick={onNext}>
           <ChevronRight size={16} />
         </Button>
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="ghost" className="min-w-0 flex-1 justify-start truncate">
-              <span className="tabular text-fg-2">{index + 1} of {documents.length}</span>
-              <span className="truncate text-fg">{active.title}</span>
+        <span className="ml-auto flex items-center">
+          <Tip content="Fit width" shortcut="F">
+            <Button variant="ghost" aria-label="Fit width" aria-pressed={choice.mode === "width"} onClick={() => onChoice({ mode: "width", scale: 1 })}>
+              Fit width
             </Button>
-          </PopoverTrigger>
-          <PopoverContent>
-            {documents.map((d, i) => (
-              <MenuItem key={d.id} selected={d.id === active.id} onClick={() => go(d, d.initialPage)}>
-                <span className="tabular text-fg-3">{i + 1}</span>
-                {d.title}
-              </MenuItem>
-            ))}
-          </PopoverContent>
-        </Popover>
+          </Tip>
+          <Tip content="Fit page">
+            <Button variant="ghost" aria-label="Fit page" aria-pressed={choice.mode === "page"} onClick={() => onChoice({ mode: "page", scale: 1 })}>
+              Fit page
+            </Button>
+          </Tip>
+          <Tip content="Zoom out" shortcut="−">
+            <Button variant="ghost" aria-label="Zoom out" onClick={() => onZoom(-1)}>
+              <Minus size={16} />
+            </Button>
+          </Tip>
+          <Tip content="Zoom in" shortcut="+">
+            <Button variant="ghost" aria-label="Zoom in" onClick={() => onZoom(1)}>
+              <Plus size={16} />
+            </Button>
+          </Tip>
+        </span>
       </div>
-      <PdfPage url={urls[active.file]} page={page} quote={quote} onPage={(n) => go(active, n)} />
+      {missing ? (
+        <div className="flex min-h-0 flex-1 items-center justify-center p-6">
+          <div className="flex w-full max-w-xl flex-col items-start gap-4 rounded-lg border border-line bg-chip px-4 py-4">
+            <div className="text-body text-fg">{missing}</div>
+            <Button
+              variant="secondary"
+              onClick={() => document.querySelector<HTMLButtonElement>('[data-case-action="resend_request"]')?.click()}
+            >
+              Request resend
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <PdfPage url={url} file={file} page={page ?? 1} quote={quote} choice={choice} fitRef={fitRef} onCount={onCount} />
+      )}
     </div>
   );
 }
@@ -90,26 +295,50 @@ interface CiteBox {
   height: number;
 }
 
-function PdfPage({ url, page, quote, onPage }: { url: string; page: number; quote?: string; onPage: (n: number) => void }) {
+function PdfPage({
+  url,
+  file,
+  page,
+  quote,
+  choice,
+  fitRef,
+  onCount,
+}: {
+  url: string;
+  file?: string;
+  page: number;
+  quote?: string;
+  choice: ZoomChoice;
+  fitRef: { current: { width: number; page: number } };
+  onCount: (count: number) => void;
+}) {
   const scroller = useRef<HTMLDivElement>(null);
-  const pageRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const boxRef = useRef<HTMLDivElement>(null);
-  const [pageCount, setPageCount] = useState(0);
-  const [zoom, setZoom] = useState(1);
   const [error, setError] = useState<string | null>(null);
   const [callout, setCallout] = useState<string | null>(null);
   const [box, setBox] = useState<CiteBox | null>(null);
   const [pulse, setPulse] = useState(false);
+  const [frame, setFrame] = useState({ w: 0, h: 0 });
   const docRef = useRef<{ url: string; doc: PDFDocumentProxy } | null>(null);
+
+  useEffect(() => {
+    const host = scroller.current;
+    if (!host) return;
+    const measure = () => setFrame({ w: host.clientWidth, h: host.clientHeight });
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     if (!box) return;
     setPulse(true);
     boxRef.current?.scrollIntoView({ block: "center", inline: "nearest" });
-    const t = setTimeout(() => setPulse(false), 500);
-    return () => clearTimeout(t);
+    const timer = setTimeout(() => setPulse(false), 600);
+    return () => clearTimeout(timer);
   }, [box]);
 
   useEffect(() => {
@@ -117,7 +346,7 @@ function PdfPage({ url, page, quote, onPage }: { url: string; page: number; quot
     const canvas = canvasRef.current;
     const textLayerEl = textRef.current;
     const host = scroller.current;
-    if (!canvas || !textLayerEl || !host) return;
+    if (!canvas || !textLayerEl || !host || frame.w === 0) return;
 
     let cancelled = false;
     let renderTask: { cancel: () => void } | null = null;
@@ -138,15 +367,17 @@ function PdfPage({ url, page, quote, onPage }: { url: string; page: number; quot
           docRef.current = { url, doc: loaded };
           doc = loaded;
         }
-        const count = doc.numPages;
-        setPageCount(count);
-        const safePage = Math.min(Math.max(page, 1), count);
+        onCount(doc.numPages);
+        const safePage = Math.min(Math.max(page, 1), doc.numPages);
         const pdfPage = await doc.getPage(safePage);
         if (cancelled) return;
 
         const base = pdfPage.getViewport({ scale: 1 });
-        const fit = Math.max(0.5, (host.clientWidth - 32) / base.width);
-        const scale = fit * zoom;
+        const pad = 8;
+        const fitWidth = Math.max(0.25, (host.clientWidth - pad) / base.width);
+        const fitPage = Math.max(0.25, Math.min(fitWidth, (host.clientHeight - pad) / base.height));
+        fitRef.current = { width: fitWidth, page: fitPage };
+        const scale = choice.mode === "width" ? fitWidth : choice.mode === "page" ? fitPage : choice.scale;
         const viewport = pdfPage.getViewport({ scale });
         const dpr = window.devicePixelRatio || 1;
         const output = pdfPage.getViewport({ scale: scale * dpr });
@@ -172,9 +403,10 @@ function PdfPage({ url, page, quote, onPage }: { url: string; page: number; quot
         if (cancelled) return;
         const runs = glyphRuns(textContent.items);
         const spans = [...textLayerEl.querySelectorAll("span")];
-        const next = quote ? locateQuote(runs, spans.length === runs.length ? spans : [], viewport, quote) : null;
+        const fromText = quote ? locateQuote(runs, spans.length === runs.length ? spans : [], viewport, quote) : null;
+        const next = fromText ?? (quote ? scaleBox(boxForQuote(file, safePage, quote), viewport.width, viewport.height) : null);
         setBox(next);
-        setCallout(quote && !next ? quote : null);
+        setCallout(quote ?? null);
       } catch (err) {
         if (!cancelled) setError(err instanceof Error ? err.message : "Could not read this PDF");
       }
@@ -186,51 +418,31 @@ function PdfPage({ url, page, quote, onPage }: { url: string; page: number; quot
       layer?.cancel();
       setBox(null);
     };
-  }, [url, page, quote, zoom]);
+  }, [url, file, page, quote, choice, frame.w, frame.h, fitRef, onCount]);
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-8 shrink-0 items-center gap-1 px-2">
-        <Button variant="ghost" aria-label="Previous page" disabled={page <= 1} onClick={() => onPage(page - 1)}>
-          <ChevronLeft size={16} />
-        </Button>
-        <span className="tabular px-1 text-caption text-fg-2">
-          {page} of {pageCount || "–"}
-        </span>
-        <Button variant="ghost" aria-label="Next page" disabled={pageCount > 0 && page >= pageCount} onClick={() => onPage(page + 1)}>
-          <ChevronRight size={16} />
-        </Button>
-        <span className="ml-auto flex items-center">
-          <Button variant="ghost" aria-label="Zoom out" onClick={() => setZoom((z) => Math.max(0.6, Math.round((z - 0.2) * 10) / 10))}>
-            <Minus size={16} />
-          </Button>
-          <span className="tabular w-10 text-center text-caption text-fg-2">{Math.round(zoom * 100)}%</span>
-          <Button variant="ghost" aria-label="Zoom in" onClick={() => setZoom((z) => Math.min(2, Math.round((z + 0.2) * 10) / 10))}>
-            <Plus size={16} />
-          </Button>
-        </span>
-      </div>
-      <div ref={scroller} className="min-h-0 flex-1 overflow-auto p-4">
-        {error && <div className="text-body text-fg-2">{error}</div>}
-        {callout && (
-          <div className="mb-2 rounded-md bg-yellow-100 px-2 py-1 text-caption text-fg dark:bg-yellow-950">{callout}</div>
+    <div ref={scroller} className="min-h-0 flex-1 overflow-auto p-1">
+      {error && <div className="mb-2 text-body text-fg-2">{error}</div>}
+      {callout && <div className="mb-2 line-clamp-3 rounded-md bg-yellow-100 px-2 py-1 text-caption text-fg dark:bg-yellow-950">{callout}</div>}
+      <div className="relative mx-auto w-fit bg-panel">
+        <canvas ref={canvasRef} />
+        <div ref={textRef} className="textLayer" />
+        {box && (
+          <div
+            ref={boxRef}
+            data-cite-box
+            aria-hidden
+            className={pulse ? "cite-box pulse" : "cite-box"}
+            style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
+          />
         )}
-        <div ref={pageRef} className="relative mx-auto w-fit bg-panel">
-          <canvas ref={canvasRef} />
-          <div ref={textRef} className="textLayer" />
-          {box && (
-            <div
-              ref={boxRef}
-              data-cite-box
-              aria-hidden
-              className={pulse ? "cite-box pulse" : "cite-box"}
-              style={{ left: box.left, top: box.top, width: box.width, height: box.height }}
-            />
-          )}
-        </div>
       </div>
     </div>
   );
+}
+
+function scaleBox(box: NormBox, width: number, height: number): CiteBox {
+  return { left: box.x * width, top: box.y * height, width: box.w * width, height: box.h * height };
 }
 
 /** A PDF text run. Coordinates are in page space, origin at the bottom left. */

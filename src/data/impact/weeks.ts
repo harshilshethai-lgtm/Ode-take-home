@@ -34,10 +34,10 @@ export interface WeekRow {
   n: Record<SeriesKey, number>;
 }
 
-export const PHASES: { id: Phase; label: string; from: number; to: number }[] = [
-  { id: "shadowWeeks", label: "Shadow", from: 0, to: 2 },
-  { id: "assisted", label: "Assisted", from: 3, to: 6 },
-  { id: "expand", label: "Expand", from: 7, to: 12 },
+export const PHASES: { id: Phase; label: string; from: number; to: number; note: string }[] = [
+  { id: "shadowWeeks", label: "Shadow", from: 0, to: 2, note: "Weeks 0–2. Nurses review every request." },
+  { id: "assisted", label: "Assisted", from: 3, to: 6, note: "Weeks 3–6. Same-day submission starts." },
+  { id: "expand", label: "Expand", from: 7, to: 12, note: "Weeks 7–12. More hospitals join." },
 ];
 
 export const WEEK_MIN = 0;

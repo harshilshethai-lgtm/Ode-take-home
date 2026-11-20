@@ -13,7 +13,8 @@ const OVERRIDE: Partial<Record<StatusId, StatusTone>> = {
   needs_clinical_review: "review",
 };
 
-export function statusTone(status: StatusId): StatusTone {
+export function statusTone(status: StatusId, reasonCode?: string | null): StatusTone {
+  if (reasonCode === "UNREADABLE_DOCUMENT") return "blocked";
   const o = OVERRIDE[status];
   if (o) return o;
   switch (STATUSES[status].group) {

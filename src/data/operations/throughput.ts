@@ -1,5 +1,6 @@
 import { HOSPITAL } from "@/data/operations/queue";
 import { addBusinessHours } from "@/domain/operations/time";
+import { DEMO_NOW, demoDateKey, parseDemoInstant } from "@/lib/demoClock";
 
 /**
  * Illustrative completed requests for the eight weeks ending on the demo clock.
@@ -187,6 +188,12 @@ export const MATCHED_BASELINE: Record<string, number> = Object.fromEntries(
   PLANS.map((plan) => [plan.insurer, plan.matchedBaseline]),
 );
 
+/** Median hours from order to an insurer decision, for the current week. */
+export function medianDecisionHours(insurer: string | null): number {
+  const plan = PLANS.find((item) => item.insurer === insurer);
+  return plan?.current.decisionHours ?? 48;
+}
+
 function lerp(a: number, b: number, t: number): number {
   return a + (b - a) * t;
 }
@@ -222,14 +229,14 @@ function shapeAt(plan: InsurerPlan, weekIndex: number): WeekShape {
   };
 }
 
-/** Wednesday 10:00 of the reporting week, then one week earlier per step. Nov 4 2026 is that Wednesday. */
+/** Wednesday 10:00 Eastern of the week of Nov 4, then one week earlier per step. */
 function weekWednesday(weeksAgo: number): Date {
-  const date = new Date(2026, 10, 4, 10, 0, 0, 0);
-  date.setDate(date.getDate() - weeksAgo * 7);
-  return date;
+  const date = parseDemoInstant("2026-11-04T10:00:00");
+  return new Date(date.getTime() - weeksAgo * 7 * 24 * 36e5);
 }
 
-const DEMO_MORNING = new Date(2026, 10, 9, 8, 0, 0, 0);
+/** Morning of the demo day, so "today" on the scorecard is the clock's day. */
+const DEMO_MORNING = parseDemoInstant(`${demoDateKey(DEMO_NOW)}T08:00:00`);
 
 function buildInsurer(plan: InsurerPlan): ThroughputCase[] {
   const out: ThroughputCase[] = [];

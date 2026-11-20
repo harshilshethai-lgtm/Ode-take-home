@@ -1,40 +1,43 @@
 import { useState, type ReactNode } from "react";
-import { Check, ChevronRight, CircleHelp, Clock, FileText, Image, Sparkles, X } from "lucide-react";
+import { Link } from "react-router-dom";
+import { FileText, Image, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Chip } from "@/components/ui/chip";
 import { CitationChip } from "@/components/ui/citation-chip";
-import { CheckedAgainst } from "@/components/evaluation/CheckedAgainst";
+import { SourceTag } from "@/components/ui/source-tag";
+import { Tip } from "@/components/ui/tooltip";
+import { ChecklistCard, EvidenceCard, StatusMark } from "@/components/case/ChecklistCard";
 import { RulesChangedBanner } from "@/components/evaluation/RulesChangedBanner";
 import {
   caseButtons,
   documentRows,
   documentSummary,
   orderFields,
-  presentChecklist,
   type CaseButton,
-  type ChecklistItem,
-  type ChecklistView,
   type DocRow,
   type OrderField,
 } from "@/domain/casePage";
+import { composeAiSummary, presentChecklist, presentEvidenceCard } from "@/domain/checklistView";
+import { CRITERION_STATUS_LABEL, label, policyVersionLabel } from "@/lib/labels";
+import { versionHref } from "@/lib/evalNotice";
+import type { CriterionStatus } from "@/domain/rules/types";
 import { actionsFor } from "@/domain/priorAuth/actions";
 import { toOrderStatus, toStatusId } from "@/domain/priorAuth/legacy";
 import { explainReason, reasonChip, whatToDo } from "@/domain/priorAuth/reasons";
 import { renderActions } from "@/domain/priorAuth/render";
 import { AuthState, createOrder, readAudits, recordSideEffect, transitionOrder } from "@/domain/priorAuth/store";
 import type { Effect, OrderSnapshot, UserRole } from "@/domain/priorAuth/types";
-import type { Evaluation } from "@/domain/rules/types";
 import type { CaseRecord } from "@/domain/caseRecord";
-import type { CheckResult, ReviewPanel } from "@/domain/review/types";
+import { portalPacketFor } from "@/domain/portalPacket";
+import type { ReviewPanel } from "@/domain/review/types";
 import type { Order } from "@/domain/types";
 import { cn } from "@/lib/cn";
+import { SUBMIT_BY_HINT, parseDemoInstant } from "@/lib/demoClock";
+import { fmtScanNumeric, fmtTableDate } from "@/lib/format";
 import { PEOPLE_BY_ID } from "@/data/people";
-import { fmtTableDate } from "@/lib/format";
 import { useOrderCheck } from "@/lib/useOrderCheck";
 import { InsurerBlock } from "@/components/case/InsurerBlock";
 import type { InsurerPanelModel } from "@/domain/insurer/view";
-
-const WEEKDAY = new Intl.DateTimeFormat("en-US", { weekday: "short" });
 
 interface OpenPage {
   docId: string;
@@ -50,14 +53,8 @@ export interface AppliedCase {
   linkedApproval?: boolean;
 }
 
-function headlineSentences(text: string): number {
-  return text.split(/[.!?]+(?:\s|$)/).filter((part) => part.trim()).length;
-}
-
 function scanStamp(iso: string): string {
-  const at = new Date(iso);
-  const time = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(at);
-  return `${WEEKDAY.format(at)} ${at.getMonth() + 1}/${at.getDate()}, ${time}`;
+  return fmtScanNumeric(parseDemoInstant(iso));
 }
 
 export function CaseLayout({
@@ -82,27 +79,30 @@ export function CaseLayout({
   onCheckNow?: () => void;
 }) {
   const check = useOrderCheck(order.orderNumber);
-  const checklist = presentChecklist(order, panel);
+  const base = presentChecklist(order, panel, record);
+  const snap = check.evaluation?.rulesSnapshot ?? null;
+  const checklist = snap
+    ? { ...base, policyLabel: policyVersionLabel(snap.externalPolicyId, snap.sourceRevisionLabel, snap.versionNumber), policyHref: versionHref(snap.policyId, snap.versionId) }
+    : base;
+  const evidence = presentEvidenceCard(order, panel);
   const docs = documentRows(record, panel);
   const fields = orderFields(order, record, panel);
 
   return (
     <div className="flex flex-col gap-6">
-      <AiSummary order={order} panel={panel} role={role} actorId={actorId} onApplied={onApplied} onCheckNow={onCheckNow} />
+      <AiSummary order={order} panel={panel} checklist={checklist} role={role} actorId={actorId} onApplied={onApplied} onCheckNow={onCheckNow} />
       {check.staleness && (
         <RulesChangedBanner staleness={check.staleness} onRerun={() => check.recheck(PEOPLE_BY_ID[actorId]?.name ?? "System")} />
       )}
+      {order.submissionBlocked && <p data-helper className="text-body text-fg-2">Submission blocked until records arrive.</p>}
+      <PortalChecklist order={order} record={record} />
       <div className="grid grid-cols-1 gap-6 case:grid-cols-2">
-        <OrderBlock fields={fields} onOpen={onOpen} />
+        <OrderBlock fields={fields} policy={checklist.policyLabel && checklist.policyHref ? { label: checklist.policyLabel, href: checklist.policyHref } : null} onOpen={onOpen} />
         <DocumentsBlock rows={docs} onOpen={onOpen} />
       </div>
-      {checklist.groups.length > 0 && <ChecklistBlock view={checklist} evaluation={check.evaluation} onOpen={onOpen} />}
+      <ChecklistCard model={checklist} onOpen={onOpen} />
       {insurer && <InsurerBlock panel={insurer} onCheckNow={onCheckNow} />}
-      {failedEvidence(panel).length > 0 && (
-        <Fold title="Evidence" summary={String(failedEvidence(panel).length)} defaultOpen review="Evidence">
-          <EvidenceBody blocks={failedEvidence(panel)} onOpen={onOpen} />
-        </Fold>
-      )}
+      <EvidenceCard lines={evidence} onOpen={onOpen} />
       <Fold
         title="Activity"
         summary={panel.activity[0] ? `${panel.activity[0].actor} · ${panel.activity[0].to}` : String(panel.activity.length)}
@@ -163,9 +163,30 @@ function Fold({
   );
 }
 
+function summaryStatus(checklist: ReturnType<typeof presentChecklist>): CriterionStatus | null {
+  const rows = checklist.criteria?.rows ?? [];
+  const open = rows.filter((row) => row.status !== "met" && row.status !== "waived");
+  if (open.length === 0) return null;
+  return open.slice().sort((a, b) => statusRank(a.status) - statusRank(b.status))[0]?.status ?? null;
+}
+
+function statusRank(status: CriterionStatus): number {
+  if (status === "not_met") return 0;
+  if (status === "unknown") return 1;
+  if (status === "needs_review") return 2;
+  return 3;
+}
+
+function issueChip(code: Order["otherIssues"][number]["code"]): string {
+  if (code === "CRITERIA_NOT_MET") return label(CRITERION_STATUS_LABEL, "not_met");
+  if (code === "MISSING_DOCUMENTS") return label(CRITERION_STATUS_LABEL, "unknown");
+  return reasonChip(code);
+}
+
 function AiSummary({
   order,
   panel,
+  checklist,
   role,
   actorId,
   onApplied,
@@ -173,6 +194,7 @@ function AiSummary({
 }: {
   order: Order;
   panel: ReviewPanel;
+  checklist: ReturnType<typeof presentChecklist>;
   role: UserRole;
   actorId: string;
   onApplied: (result: AppliedCase) => void;
@@ -182,26 +204,30 @@ function AiSummary({
   const buttons = submitted ? [] : caseButtons(order.reasonCode, role);
   const headline = order.reasonCode ? explainReason(order.reasonCode, order.detail) : order.reason;
   const next = order.reasonCode ? whatToDo(order.reasonCode, order.detail) : "No person needs to act. The pipeline is still working.";
-  const chip = order.reasonCode ? reasonChip(order.reasonCode) : null;
-  const fix = panel.scan.deadline?.replace(/^Fix by /i, "");
+  const summary = composeAiSummary(headline, next);
+  const criterionStatus = summaryStatus(checklist);
+  const chip = criterionStatus ? null : order.reasonCode ? reasonChip(order.reasonCode) : null;
+  const deadlineLabel = panel.scan.deadline ?? "";
+  const pastDue = /^past due/i.test(deadlineLabel);
+  const fix = deadlineLabel.replace(/^(Past due · |Submit by |Fix by )/i, "");
   const risk = panel.scan.risk === "at_risk" || panel.scan.risk === "slot_at_risk";
 
   return (
     <section className="rounded-block border border-accent-line bg-accent-bg px-6 py-5">
       <div className="flex flex-wrap items-center gap-2">
-        <Sparkles size={18} className="text-accent-fg" aria-hidden="true" />
+        <Sparkles size={16} className="text-accent-fg" aria-hidden="true" />
         <span className="text-body font-medium text-accent-fg">AI summary</span>
+        {criterionStatus && <StatusMark status={criterionStatus} />}
         {chip && <span className="inline-flex h-5 items-center rounded-md border border-accent-line px-2 text-caption font-medium text-accent-fg">{chip}</span>}
       </div>
-      <div {...(headlineSentences(headline) <= 2 ? { "data-ai-summary": true } : {})} className="mt-2 text-lead text-fg">
-        {headline}
+      <div data-ai-summary className="mt-2 text-body text-fg">
+        {summary}
       </div>
-      <div className="mt-2 text-value text-fg-2">{next}</div>
       {order.otherIssues.length > 0 && (
         <ul className="mt-4 flex flex-col gap-2">
           {order.otherIssues.map((issue) => (
             <li key={`${issue.code}-${issue.detail.document ?? issue.detail.line ?? ""}`} data-row className="flex items-start gap-2">
-              <Chip>{reasonChip(issue.code)}</Chip>
+              <Chip>{issueChip(issue.code)}</Chip>
               <span className="text-body text-fg-2">{issue.detail.line ? String(issue.detail.line) : explainReason(issue.code, issue.detail)}</span>
             </li>
           ))}
@@ -214,8 +240,10 @@ function AiSummary({
               Scan {scanStamp(order.scheduledAt)}
               {fix && (
                 <>
-                  {" · fix by "}
-                  <span className={risk ? "text-warning" : undefined}>{fix}</span>
+                  {pastDue ? " · Past due · " : " · Submit by "}
+                  <Tip content={SUBMIT_BY_HINT}>
+                    <span className={risk ? "text-warning" : undefined}>{fix}</span>
+                  </Tip>
                 </>
               )}
             </div>
@@ -259,9 +287,13 @@ function snapshotOf(order: Order): OrderSnapshot {
 
 function sideEffect(id: string, orderId: string): Effect {
   if (id === "notify_ordering_doctor") return { type: "notify_ordering_doctor", orderId };
-  if (id === "message_ordering_doctor") return { type: "message_ordering_doctor", orderId };
+  if (id === "message_ordering_doctor" || id === "send_draft") return { type: "message_ordering_doctor", orderId };
   if (id === "open_packet") return { type: "open_packet", orderId };
   return { type: "resend_request", orderId };
+}
+
+function submits(button: CaseButton): boolean {
+  return button.action?.to === "SUBMITTED" || button.action?.step === "SUBMITTING";
 }
 
 function SummaryActions({
@@ -345,7 +377,7 @@ function SummaryActions({
         <input
           value={portalReference}
           onChange={(event) => setPortalReference(event.target.value)}
-          placeholder="Portal reference"
+          placeholder="Confirmation number"
           aria-label="Portal reference"
           className="h-8 w-40 rounded-md border border-line bg-panel px-2 text-body text-fg outline-none"
         />
@@ -353,7 +385,7 @@ function SummaryActions({
       {buttons.map((button, index) => {
         const view = rendered.find((item) => item.id === button.id);
         return (
-          <Button key={button.id} variant={index === 0 ? "default" : "secondary"} disabled={view?.disabled ?? false} onClick={() => run(button)}>
+          <Button key={button.id} data-case-action={button.id} variant={index === 0 ? "default" : "secondary"} disabled={(view?.disabled ?? false) || (order.submissionBlocked === true && submits(button))} onClick={() => run(button)}>
             {button.label}
           </Button>
         );
@@ -362,14 +394,28 @@ function SummaryActions({
   );
 }
 
-function OrderBlock({ fields, onOpen }: { fields: OrderField[]; onOpen: (cite: OpenPage) => void }) {
+function OrderBlock({
+  fields,
+  policy,
+  onOpen,
+}: {
+  fields: OrderField[];
+  policy: { label: string; href: string } | null;
+  onOpen: (cite: OpenPage) => void;
+}) {
   return (
     <Block title="Order">
-      <div className="grid grid-cols-2 gap-x-6">
+      <div className="grid grid-cols-1 gap-x-6 fields:grid-cols-2">
         {fields.map((field, index) => (
-          <div key={field.label} className={cn("min-w-0 py-4", index >= 2 && "border-t border-line")}>
+          <div key={field.label} className={cn("min-w-0 border-t border-line py-4", index === 0 && "border-t-0", index === 1 && "fields:border-t-0")}>
             <div className="text-caption text-fg-2">{field.label}</div>
-            <FieldValue field={field} onOpen={onOpen} />
+            {field.label === "Policy" && policy && !field.muted ? (
+              <Link to={policy.href} className="text-value text-accent-fg">
+                {policy.label}
+              </Link>
+            ) : (
+              <FieldValue field={field} onOpen={onOpen} />
+            )}
           </div>
         ))}
       </div>
@@ -380,12 +426,57 @@ function OrderBlock({ fields, onOpen }: { fields: OrderField[]; onOpen: (cite: O
 function FieldValue({ field, onOpen }: { field: OrderField; onOpen: (cite: OpenPage) => void }) {
   const className = cn("text-value", field.muted ? "text-fg-2" : "text-fg", field.mono && "font-mono");
   const value = field.label === "Exam" ? <ExamValue value={field.value} /> : field.value;
-  if (!field.cite) return <div className={className}>{value}</div>;
+  const tags = (
+    <>
+      {field.handwritten && <span className="text-caption text-fg-3">Handwritten</span>}
+      {field.unparsed && <span className="text-caption text-fg-3">Unparsed</span>}
+      {field.cite && <CitationChip page={field.cite.page} excerpt={field.cite.quote} onOpen={() => onOpen({ docId: field.cite!.docId, page: field.cite!.page, quote: field.cite!.quote })} />}
+      {field.origin === "epic" && <SourceTag lastRun={field.lastRun} />}
+    </>
+  );
+  if (!field.cite && field.origin !== "epic" && !field.handwritten && !field.unparsed) return <div className={className}>{value}</div>;
   return (
-    <button type="button" className="flex items-center gap-2 text-left" onClick={() => onOpen({ docId: field.cite!.docId, page: field.cite!.page, quote: field.cite!.quote })}>
+    <div className="flex flex-wrap items-center gap-2">
       <span className={className}>{value}</span>
-      <ChevronRight size={16} className="text-fg-3" aria-hidden="true" />
-    </button>
+      {tags}
+    </div>
+  );
+}
+
+function PortalChecklist({ order, record }: { order: Order; record: CaseRecord }) {
+  const packet = portalPacketFor(order, record);
+  const [copied, setCopied] = useState<string | null>(null);
+  if (!packet) return null;
+  async function copy(label: string, value: string) {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(label);
+    } catch {
+      setCopied(null);
+    }
+  }
+  return (
+    <section className="rounded-block border border-line-strong bg-panel px-6 py-5">
+      <h2 className="text-block text-fg">Portal packet</h2>
+      <p data-helper className="mt-1 text-body text-fg-2">Paste these fields, then upload the packet in order.</p>
+      <div className="mt-4 flex flex-col gap-2">
+        {packet.fields.map((field) => (
+          <div key={field.label} className="flex items-center justify-between gap-4">
+            <span className="min-w-0 text-body text-fg">
+              <span className="text-fg-2">{field.label}</span> {field.value}
+            </span>
+            <Button variant="ghost" onClick={() => void copy(field.label, field.value)}>
+              {copied === field.label ? "Copied" : "Copy"}
+            </Button>
+          </div>
+        ))}
+        {packet.files.map((file) => (
+          <div key={file.label} className="text-body text-fg">
+            {file.label} · {file.detail}
+          </div>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -416,103 +507,3 @@ function DocumentsBlock({ rows, onOpen }: { rows: DocRow[]; onOpen: (cite: OpenP
   );
 }
 
-function ChecklistBlock({ view, evaluation, onOpen }: { view: ChecklistView; evaluation: Evaluation | null; onOpen: (cite: OpenPage) => void }) {
-  return (
-    <Block title="Checklist" summary={view.summary}>
-      {view.groups.map((group) => (
-        <div key={group.title} className="border-b border-line py-4 last:border-b-0 last:pb-0 first:pt-0">
-          <div className="mb-2 text-caption text-fg-2">{group.title}</div>
-          {group.items.map((item) => (
-            <ChecklistRow key={item.kind === "check" ? item.row.id : item.id} item={item} onOpen={onOpen} />
-          ))}
-        </div>
-      ))}
-      {evaluation?.rulesSnapshot && (
-        <div className="border-t border-line pt-4 text-caption text-fg-2">
-          <CheckedAgainst evaluation={evaluation} />
-        </div>
-      )}
-    </Block>
-  );
-}
-
-function ChecklistRow({ item, onOpen }: { item: ChecklistItem; onOpen: (cite: OpenPage) => void }) {
-  const [open, setOpen] = useState(false);
-  if (item.kind === "waiting") {
-    return (
-      <div className="flex items-center gap-2 py-2">
-        <Clock size={16} className="text-fg-2" aria-hidden="true" />
-        <span className="text-value text-fg-2">{item.label}</span>
-      </div>
-    );
-  }
-  if (item.kind === "collapse") {
-    return (
-      <div>
-        <button type="button" className="flex w-full items-center gap-2 py-2 text-left" aria-expanded={open} onClick={() => setOpen((value) => !value)}>
-          <Check size={16} className="text-good" aria-hidden="true" />
-          <span className="text-value text-fg">{item.label}</span>
-        </button>
-        {open &&
-          item.rows.map((row) => (
-            <div key={row.id} className="flex items-start gap-2 py-2 pl-6">
-              <ResultIcon result={row.result} />
-              <div className="min-w-0 flex-1">
-                <div className="text-value text-fg">{row.label}</div>
-                {row.found && <div className="text-body text-fg-2">{row.found}</div>}
-              </div>
-            </div>
-          ))}
-      </div>
-    );
-  }
-  const row = item.row;
-  return (
-    <div className="flex items-start gap-2 py-2">
-      <ResultIcon result={row.result} />
-      <div className="min-w-0 flex-1">
-        <div className="text-value text-fg">{row.label}</div>
-        {row.found && <div className="text-body text-fg-2">{row.found}</div>}
-      </div>
-      {row.page != null && row.docId && <CitationChip page={row.page} excerpt={row.quote} onOpen={() => onOpen({ docId: row.docId!, page: row.page!, quote: row.quote })} />}
-    </div>
-  );
-}
-
-function ResultIcon({ result }: { result: CheckResult }) {
-  if (result === "NOT_MET") return <X size={16} className="mt-1 text-bad" aria-hidden="true" />;
-  if (result === "UNCLEAR") return <CircleHelp size={16} className="mt-1 text-warning" aria-hidden="true" />;
-  return <Check size={16} className="mt-1 text-good" aria-hidden="true" />;
-}
-
-function failedEvidence(panel: ReviewPanel): ReviewPanel["evidence"] {
-  const open = new Set(
-    [...panel.checks.consistency, ...panel.checks.criteria.rows, ...panel.coverage, ...panel.documentNotes]
-      .filter((row) => row.result === "NOT_MET" || row.result === "UNCLEAR")
-      .map((row) => row.id),
-  );
-  if (open.size === 0) return [];
-  return panel.evidence.filter((block) => open.has(block.forCheckId));
-}
-
-function EvidenceBody({ blocks, onOpen }: { blocks: ReviewPanel["evidence"]; onOpen: (cite: OpenPage) => void }) {
-  return (
-    <>
-      {blocks.map((block) => (
-        <div key={block.forCheckId} className="border-b border-line py-4 last:border-b-0 last:pb-0 first:pt-0">
-          <div className="text-caption text-fg-2">Evidence for {block.fact}</div>
-          {block.rows.map((row) => (
-            <div key={`${block.forCheckId}-${row.page}-${row.source}`} className="mt-2 flex items-start gap-4">
-              <div className="min-w-0 flex-1">
-                <div className="text-value text-fg">{row.source}</div>
-                <div className="text-body text-fg-2">{row.value}</div>
-                <div className="text-body text-fg-2">“{row.quote}”</div>
-              </div>
-              <CitationChip page={row.page} excerpt={row.quote} onOpen={() => onOpen({ docId: row.docId, page: row.page, quote: row.quote })} />
-            </div>
-          ))}
-        </div>
-      ))}
-    </>
-  );
-}
