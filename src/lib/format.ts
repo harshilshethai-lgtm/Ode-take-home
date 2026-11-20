@@ -2,6 +2,13 @@ const dateFmt = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "sho
 const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
 const dobFmt = new Intl.DateTimeFormat("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
 
+const weekdayFmt = new Intl.DateTimeFormat("en-US", { weekday: "short" });
+
+/** Tables: "Wed 11/18 · 2:30 PM" */
+export function fmtTableDate(d: Date): string {
+  return `${weekdayFmt.format(d)} ${d.getMonth() + 1}/${d.getDate()} · ${timeFmt.format(d)}`;
+}
+
 export function fmtDate(d: Date): string {
   return dateFmt.format(d);
 }

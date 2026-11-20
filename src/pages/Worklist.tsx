@@ -1,372 +1,387 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Search, UserPlus, X } from "lucide-react";
-import { AssignCell, eligiblePeople } from "@/components/AssignCell";
-import { StatusLabel } from "@/components/badges";
-import { FlagIcons, FlagLegend } from "@/components/flags";
+import { Check, ChevronDown, Search, X } from "lucide-react";
+import { AssignMenu, eligiblePeople, firstName } from "@/components/AssignMenu";
+import { Button } from "@/components/ui/button";
+import { Avatar } from "@/components/ui/avatar";
+import { Chip } from "@/components/ui/chip";
+import { DataTable, type Column } from "@/components/ui/data-table";
+import { FlagIcons } from "@/components/ui/flag-icons";
+import { Kbd } from "@/components/ui/kbd";
+import { PageTitle } from "@/components/ui/page-title";
+import { MenuItem, Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { StatusLabel } from "@/components/ui/status-dot";
+import { Tabs } from "@/components/ui/tabs";
+import { Tip } from "@/components/ui/tooltip";
 import { PEOPLE } from "@/data/people";
-import { STATUSES, type OwnerRole } from "@/domain/statuses";
-import { TIME_RISK_LABEL, type TimeRisk } from "@/domain/timeRisk";
+import { STATUSES } from "@/domain/statuses";
 import type { Person } from "@/domain/types";
-import { fmtDuration, fmtScan } from "@/lib/format";
+import { fmtDuration, fmtTableDate } from "@/lib/format";
+import { SIDE_SHORT, label } from "@/lib/labels";
 import { usePersona } from "@/lib/persona";
+import { statusTone } from "@/lib/statusTone";
 import { useOrders } from "@/lib/useWorklistState";
-import {
-  bySchedule,
-  inView,
-  matchesQuick,
-  matchesSearch,
-  QUICK_FILTERS,
-  toRow,
-  VIEWS,
-  type QuickFilter,
-  type Row,
-  type ViewId,
-} from "@/lib/worklist";
+import { bySchedule, inView, matchesSearch, toRow, VIEWS, type Row, type ViewId } from "@/lib/worklist";
 
 const PERSONA_DEFAULT_VIEW: Record<Person["role"], ViewId> = {
-  coordinator: "coordinator",
-  nurse: "nurse",
-  rules_admin: "nurse",
+  coordinator: "mine",
+  nurse: "mine",
+  rules_admin: "mine",
 };
+
+const isTyping = (t: EventTarget | null) =>
+  t instanceof HTMLElement && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.tagName === "SELECT" || t.isContentEditable);
 
 export default function Worklist() {
   const navigate = useNavigate();
-  const { orders, assign, reset } = useOrders();
+  const { orders, assign } = useOrders();
   const { me } = usePersona();
+  const searchRef = useRef<HTMLInputElement>(null);
 
-  const [view, setView] = useState<ViewId>("open");
-  const [quick, setQuick] = useState<QuickFilter | null>(null);
-  const [risk, setRisk] = useState<TimeRisk | "all">("all");
-  const [statusFilter, setStatusFilter] = useState<string>("all");
+  const [view, setView] = useState<ViewId>(PERSONA_DEFAULT_VIEW[me.role]);
+  const [statusFilter, setStatusFilter] = useState<string | null>(null);
+  const [insurerFilter, setInsurerFilter] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [cursor, setCursor] = useState<string | null>(null);
 
   const rows = useMemo(() => orders.map((o) => toRow(o)), [orders]);
 
   const visible = useMemo(
     () =>
       rows
-        .filter((r) => inView(r, view))
-        .filter((r) => (quick ? matchesQuick(r, quick) : true))
-        .filter((r) => (risk === "all" ? true : r.risk === risk))
-        .filter((r) => (statusFilter === "all" ? true : r.order.status === statusFilter))
+        .filter((r) => inView(r, view, me))
+        .filter((r) => (statusFilter ? r.order.status === statusFilter : true))
+        .filter((r) => (insurerFilter ? r.order.insurer === insurerFilter : true))
         .filter((r) => matchesSearch(r, query))
         .sort(bySchedule),
-    [rows, view, quick, risk, statusFilter, query],
+    [rows, view, me, statusFilter, insurerFilter, query],
   );
 
-  const statusOptions = useMemo(() => {
-    const ids = new Set(rows.filter((r) => inView(r, view)).map((r) => r.order.status));
-    return [...ids].map((id) => ({ id, label: STATUSES[id].label }));
-  }, [rows, view]);
+  const inScope = useMemo(() => rows.filter((r) => inView(r, view, me)), [rows, view, me]);
+  const statusOptions = useMemo(
+    () => [...new Set(inScope.map((r) => r.order.status))].map((id) => ({ id: id as string, label: STATUSES[id].label })),
+    [inScope],
+  );
+  const insurerOptions = useMemo(
+    () => [...new Set(inScope.map((r) => r.order.insurer).filter((v): v is string => !!v))].sort(),
+    [inScope],
+  );
 
   const selectedRows = visible.filter((r) => selected.has(r.order.id));
-  const selectedRoles = new Set<OwnerRole>(selectedRows.map((r) => r.ownerRole));
-  const bulkEligible = (() => {
-    const humanRoles = [...selectedRoles].filter((r) => r !== "system");
-    if (selectedRows.length === 0 || humanRoles.length !== selectedRoles.size) return [];
-    const lists = humanRoles.map((r) => new Set(eligiblePeople(r).map((p) => p.id)));
+  const bulkPeople = useMemo(() => {
+    const roles = [...new Set(selectedRows.map((r) => r.ownerRole))];
+    if (selectedRows.length === 0 || roles.includes("system")) return [];
+    const lists = roles.map((r) => new Set(eligiblePeople(r).map((p) => p.id)));
     return PEOPLE.filter((p) => lists.every((l) => l.has(p.id)));
-  })();
+  }, [selectedRows]);
+  const allSelected = visible.length > 0 && visible.every((r) => selected.has(r.order.id));
 
-  const allVisibleSelected = visible.length > 0 && visible.every((r) => selected.has(r.order.id));
-
-  function toggle(id: string) {
+  const toggle = (id: string) =>
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) next.delete(id);
       else next.add(id);
       return next;
     });
-  }
-
-  function toggleAll() {
-    setSelected(allVisibleSelected ? new Set() : new Set(visible.map((r) => r.order.id)));
-  }
-
-  // Switching persona (in the shell's top bar) lands on that role's default saved view.
-  const prevPersonaId = useRef(me.id);
-  useEffect(() => {
-    if (prevPersonaId.current === me.id) return;
-    prevPersonaId.current = me.id;
-    setView(PERSONA_DEFAULT_VIEW[me.role]);
-    setSelected(new Set());
-    setStatusFilter("all");
-    setQuick(null);
-  }, [me.id, me.role]);
 
   function changeView(v: ViewId) {
     setView(v);
     setSelected(new Set());
-    setStatusFilter("all");
+    setStatusFilter(null);
+    setInsurerFilter(null);
+    setCursor(null);
   }
 
-  const quickCount = (f: QuickFilter) => rows.filter((r) => matchesQuick(r, f)).length;
-  const viewCount = (v: ViewId) => rows.filter((r) => inView(r, v)).length;
+  // Switching persona lands on that person's own queue.
+  const prevPersonaId = useRef(me.id);
+  useEffect(() => {
+    if (prevPersonaId.current === me.id) return;
+    prevPersonaId.current = me.id;
+    changeView(PERSONA_DEFAULT_VIEW[me.role]);
+  }, [me.id, me.role]);
 
-  return (
-    <main className="mx-auto w-full max-w-[1500px] px-6 py-6">
-      <div className="mb-4 flex items-end justify-between">
-        <div>
-          <h1 className="text-xl font-semibold">Worklist</h1>
-          <p className="text-sm text-slate-500">Sorted by scan date, earliest first.</p>
-        </div>
-        <button onClick={reset} className="text-xs text-slate-400 hover:text-slate-600 hover:underline">
-          Reset demo assignments
-        </button>
-      </div>
+  // Keyboard: J/K move, Enter opens, Esc clears, A assigns to me, / focuses search.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.metaKey || e.ctrlKey || e.altKey || isTyping(e.target)) return;
+      if (document.querySelector("[role=dialog]")) return;
+      const idx = visible.findIndex((r) => r.order.id === cursor);
+      const move = (to: number) => {
+        const row = visible[Math.min(Math.max(to, 0), visible.length - 1)];
+        if (!row) return;
+        setCursor(row.order.id);
+        document.querySelector(`[data-row-key="${row.order.id}"]`)?.scrollIntoView({ block: "nearest" });
+      };
+      switch (e.key.toLowerCase()) {
+        case "j":
+          move(idx + 1);
+          break;
+        case "k":
+          move(idx < 0 ? 0 : idx - 1);
+          break;
+        case "enter":
+          if (idx >= 0) navigate(`/case/${visible[idx].order.id}`);
+          break;
+        case "escape":
+          setCursor(null);
+          setSelected(new Set());
+          break;
+        case "a":
+          if (idx >= 0 && eligiblePeople(visible[idx].ownerRole).some((p) => p.id === me.id)) {
+            assign([visible[idx].order.id], me.id);
+            // In the Unassigned view the row leaves the list; keep the cursor moving.
+            if (view === "unassigned") setCursor(visible[idx + 1]?.order.id ?? visible[idx - 1]?.order.id ?? null);
+          }
+          break;
+        case "/":
+          e.preventDefault();
+          searchRef.current?.focus();
+          break;
+        default:
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [visible, cursor, view, me.id, navigate, assign]);
 
-      {/* Quick filters */}
-      <div className="mb-4 flex flex-wrap gap-2">
-        {QUICK_FILTERS.map((f) => {
-          const active = quick === f.id;
-          const count = quickCount(f.id);
-          return (
-            <button
-              key={f.id}
-              onClick={() => setQuick(active ? null : f.id)}
-              aria-pressed={active}
-              className={`inline-flex items-baseline gap-2 rounded-full border px-3.5 py-1.5 text-sm transition ${
-                active
-                  ? "border-indigo-300 bg-indigo-50 text-indigo-800"
-                  : "border-slate-200 bg-white text-slate-600 hover:border-slate-300"
-              }`}
-            >
-              <span
-                className={`tabular font-semibold ${
-                  f.id === "slot_at_risk" && count > 0 && !active ? "text-rose-600" : ""
-                }`}
-              >
-                {count}
-              </span>
-              {f.label}
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Saved views */}
-      <div className="mb-3 flex gap-1 border-b border-slate-200">
-        {VIEWS.map((v) => {
-          const active = view === v.id;
-          return (
-            <button
-              key={v.id}
-              onClick={() => changeView(v.id)}
-              title={v.hint}
-              className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-sm transition ${
-                active
-                  ? "border-indigo-600 font-medium text-indigo-700"
-                  : "border-transparent text-slate-500 hover:text-slate-800"
-              }`}
-            >
-              {v.label}
-              <span className="tabular ml-1.5 text-xs text-slate-400">{viewCount(v.id)}</span>
-            </button>
-          );
-        })}
-      </div>
-
-      {/* Toolbar */}
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <div className="relative">
-          <Search size={14} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search patient, MRN, order #, insurer"
-            className="w-72 rounded-md border border-slate-200 bg-white py-1.5 pl-8 pr-2 text-sm outline-none focus:ring-2 focus:ring-indigo-300"
+  const columns: Column<Row>[] = [
+    {
+      id: "select",
+      header: "Select",
+      width: "w-10",
+      headerCell: (
+        <input
+          type="checkbox"
+          aria-label="Select all"
+          checked={allSelected}
+          onChange={() => setSelected(allSelected ? new Set() : new Set(visible.map((r) => r.order.id)))}
+          onClick={(e) => e.stopPropagation()}
+          className="accent-accent"
+        />
+      ),
+      cell: (r) => (
+        <input
+          type="checkbox"
+          aria-label={`Select ${r.order.patient?.name ?? "unmatched document"}`}
+          checked={selected.has(r.order.id)}
+          onChange={() => toggle(r.order.id)}
+          onClick={(e) => e.stopPropagation()}
+          className="accent-accent opacity-0 checked:opacity-100 group-hover:opacity-100"
+        />
+      ),
+    },
+    { id: "flags", header: "Flags", width: "w-20", cell: (r) => <FlagIcons flags={r.flags} /> },
+    {
+      id: "scan",
+      header: "Scan",
+      cell: (r) =>
+        r.order.scheduledAt ? <span className="tabular">{fmtTableDate(new Date(r.order.scheduledAt))}</span> : <span className="text-fg-3">—</span>,
+    },
+    {
+      id: "patient",
+      header: "Patient",
+      cell: (r) =>
+        r.order.patient ? (
+          <Tip content={<span className="font-mono">{r.order.patient.mrn}</span>}>
+            <span className="font-medium text-fg">{r.order.patient.name}</span>
+          </Tip>
+        ) : (
+          <span className="text-fg-3">Unmatched</span>
+        ),
+    },
+    {
+      id: "study",
+      header: "Study",
+      cell: (r) => (
+        <span>
+          {r.order.study}
+          {r.order.side && <span className="text-fg-2"> · {label(SIDE_SHORT, r.order.side)}</span>}
+        </span>
+      ),
+    },
+    { id: "insurer", header: "Insurer", cell: (r) => r.order.insurer ?? <span className="text-fg-3">—</span> },
+    {
+      id: "status",
+      header: "Status",
+      cell: (r) => (
+        <Tip content={`${r.order.reason}${r.closed ? "" : ` · In status ${fmtDuration(r.minutesInStatus)}`}`}>
+          <span>
+            <StatusLabel tone={statusTone(r.order.status)}>{STATUSES[r.order.status].label}</StatusLabel>
+          </span>
+        </Tip>
+      ),
+    },
+    {
+      id: "owner",
+      header: "Owner",
+      width: "w-40",
+      cell: (r) => (
+        <div onClick={(e) => e.stopPropagation()}>
+          <AssignMenu
+            role={r.ownerRole}
+            assigneeId={r.order.assigneeId}
+            me={me}
+            closed={r.closed}
+            onAssign={(pid) => assign([r.order.id], pid)}
           />
         </div>
-        <select
-          value={statusFilter}
-          onChange={(e) => setStatusFilter(e.target.value)}
-          className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm"
-          aria-label="Filter by status"
-        >
-          <option value="all">All statuses</option>
-          {statusOptions.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-        <select
-          value={risk}
-          onChange={(e) => setRisk(e.target.value as TimeRisk | "all")}
-          className="rounded-md border border-slate-200 bg-white px-2 py-1.5 text-sm"
-          aria-label="Filter by time risk"
-        >
-          <option value="all">Any time risk</option>
-          <option value="slot_at_risk">{TIME_RISK_LABEL.slot_at_risk}</option>
-          <option value="at_risk">{TIME_RISK_LABEL.at_risk}</option>
-          <option value="on_track">{TIME_RISK_LABEL.on_track}</option>
-        </select>
-        <FlagLegend />
-        <span className="ml-auto text-xs text-slate-500">
-          {visible.length} of {rows.length} orders
-        </span>
+      ),
+    },
+  ];
+
+  const openCount = rows.filter((r) => !r.closed).length;
+  const filtersApplied = statusFilter || insurerFilter;
+
+  return (
+    <main className="mx-auto w-full max-w-wide p-6">
+      <div className="mb-4">
+        <PageTitle count={openCount}>Worklist</PageTitle>
       </div>
 
-      {/* Bulk assign */}
-      {selectedRows.length > 0 && (
-        <div className="mb-3 flex items-center gap-3 rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white">
-          <span className="font-medium">{selectedRows.length} selected</span>
-          {bulkEligible.length > 0 ? (
-            <>
-              <UserPlus size={15} />
-              <select
-                aria-label="Assign selected to"
-                defaultValue=""
-                onChange={(e) => {
-                  if (!e.target.value) return;
-                  assign(
-                    selectedRows.map((r) => r.order.id),
-                    e.target.value,
-                  );
-                  setSelected(new Set());
-                }}
-                className="rounded-md border-0 bg-white px-2 py-1 text-xs font-medium text-slate-800"
-              >
-                <option value="">Assign to…</option>
-                {bulkEligible.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.id === me.id ? `${p.name} (me)` : p.name}
-                  </option>
-                ))}
-              </select>
-            </>
-          ) : (
-            <span className="text-indigo-100">
-              Selection mixes system-owned or different-role orders. Pick rows with the same owner role to assign.
-            </span>
-          )}
-          <button
-            onClick={() => setSelected(new Set())}
-            className="ml-auto inline-flex items-center gap-1 text-xs text-indigo-100 hover:text-white"
-          >
-            <X size={14} /> Clear
-          </button>
-        </div>
-      )}
+      <Tabs
+        tabs={VIEWS.map((v) => ({ ...v, count: rows.filter((r) => inView(r, v.id, me)).length }))}
+        value={view}
+        onChange={changeView}
+      />
 
-      {/* Table: one fact per column */}
-      <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-        <table className="w-full min-w-[1260px] text-left text-sm">
-          <thead className="whitespace-nowrap border-b border-slate-200 text-xs font-medium text-slate-500">
-            <tr>
-              <th className="w-10 py-3 pl-4">
-                <input type="checkbox" aria-label="Select all" checked={allVisibleSelected} onChange={toggleAll} />
-              </th>
-              <th className="w-[104px] px-3 py-3">Flags</th>
-              <th className="px-3 py-3">Scan</th>
-              <th className="px-3 py-3">Patient</th>
-              <th className="px-3 py-3">MRN</th>
-              <th className="px-3 py-3">Study</th>
-              <th className="px-3 py-3">Side</th>
-              <th className="px-3 py-3">Insurer</th>
-              <th className="px-3 py-3">Status</th>
-              <th className="w-[190px] px-3 py-3">Owner</th>
-              <th className="py-3 pl-3 pr-4 text-right">In status</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-100">
-            {visible.length === 0 && (
-              <tr>
-                <td colSpan={11} className="px-4 py-12 text-center text-sm text-slate-500">
-                  No orders match these filters.
-                </td>
-              </tr>
+      <div className="flex h-12 items-center gap-2">
+        {selectedRows.length > 0 ? (
+          <>
+            <span className="text-body text-fg">{selectedRows.length} selected</span>
+            {bulkPeople.length > 0 && (
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button>
+                    Assign <ChevronDown size={14} />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent>
+                  {bulkPeople.map((p) => (
+                    <MenuItem
+                      key={p.id}
+                      onClick={() => {
+                        assign(
+                          selectedRows.map((r) => r.order.id),
+                          p.id,
+                        );
+                        setSelected(new Set());
+                      }}
+                    >
+                      <Avatar name={p.name} />
+                      {firstName(p)}
+                      {p.id === me.id && <span className="ml-auto text-caption text-fg-3">me</span>}
+                    </MenuItem>
+                  ))}
+                </PopoverContent>
+              </Popover>
             )}
-            {visible.map((row) => (
-              <WorklistRow
-                key={row.order.id}
-                row={row}
-                me={me}
-                selected={selected.has(row.order.id)}
-                onToggle={() => toggle(row.order.id)}
-                onOpen={() => navigate(`/case/${row.order.id}`)}
-                onAssign={(pid) => assign([row.order.id], pid)}
+            <Button variant="ghost" onClick={() => setSelected(new Set())}>
+              Clear
+            </Button>
+          </>
+        ) : (
+          <>
+            <div className="relative">
+              <Search size={14} className="absolute left-2 top-1/2 -translate-y-1/2 text-fg-3" />
+              <input
+                ref={searchRef}
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                onKeyDown={(e) => e.key === "Escape" && (e.currentTarget.blur(), setQuery(""))}
+                placeholder="Search"
+                aria-label="Search"
+                className="h-7 w-56 rounded-md border border-line bg-panel pl-8 pr-6 text-body text-fg outline-none placeholder:text-fg-3 focus:border-accent-fg"
               />
-            ))}
-          </tbody>
-        </table>
+              <span className="absolute right-2 top-1/2 -translate-y-1/2">
+                <Kbd>/</Kbd>
+              </span>
+            </div>
+            <FilterButton
+              title="Status"
+              value={statusFilter}
+              options={statusOptions}
+              onChange={setStatusFilter}
+            />
+            <FilterButton
+              title="Insurer"
+              value={insurerFilter}
+              options={insurerOptions.map((i) => ({ id: i, label: i }))}
+              onChange={setInsurerFilter}
+            />
+            {filtersApplied && (
+              <span className="ml-1 flex items-center gap-1">
+                {statusFilter && (
+                  <RemovableChip onRemove={() => setStatusFilter(null)}>{label(Object.fromEntries(statusOptions.map((o) => [o.id, o.label])), statusFilter)}</RemovableChip>
+                )}
+                {insurerFilter && <RemovableChip onRemove={() => setInsurerFilter(null)}>{insurerFilter}</RemovableChip>}
+              </span>
+            )}
+          </>
+        )}
       </div>
 
-      <p className="mt-3 text-xs text-slate-400">
-        Case 1 (Kirk) is the real test case. Other rows are seeded demo data from the PRD's expected-status table.
-      </p>
+      <div className="rounded-lg border border-line bg-panel">
+        <DataTable
+          columns={columns}
+          rows={visible}
+          getKey={(r) => r.order.id}
+          selectedKey={cursor}
+          onRowClick={(r) => navigate(`/case/${r.order.id}`)}
+          empty="Nothing here"
+        />
+      </div>
     </main>
   );
 }
 
-function WorklistRow({
-  row,
-  me,
-  selected,
-  onToggle,
-  onOpen,
-  onAssign,
+function FilterButton({
+  title,
+  value,
+  options,
+  onChange,
 }: {
-  row: Row;
-  me: Person;
-  selected: boolean;
-  onToggle: () => void;
-  onOpen: () => void;
-  onAssign: (personId: string | null) => void;
+  title: string;
+  value: string | null;
+  options: { id: string; label: string }[];
+  onChange: (id: string | null) => void;
 }) {
-  const o = row.order;
-  const scan = o.scheduledAt ? new Date(o.scheduledAt) : null;
-  const muted = "text-slate-400";
-
+  const [open, setOpen] = useState(false);
   return (
-    <tr
-      onClick={onOpen}
-      className={`cursor-pointer transition hover:bg-slate-50 ${selected ? "bg-indigo-50/60" : ""} ${
-        row.closed ? "text-slate-500" : "text-slate-800"
-      }`}
-    >
-      <td className="py-2.5 pl-4" onClick={(e) => e.stopPropagation()}>
-        <input
-          type="checkbox"
-          aria-label={`Select ${o.patient?.name ?? "unmatched document"}`}
-          checked={selected}
-          onChange={onToggle}
-        />
-      </td>
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button>
+          {title}
+          <ChevronDown size={14} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-56">
+        {options.length === 0 && <div className="px-2 py-1 text-body text-fg-2">Nothing to filter</div>}
+        {options.map((o) => (
+          <MenuItem
+            key={o.id}
+            selected={o.id === value}
+            onClick={() => {
+              onChange(o.id === value ? null : o.id);
+              setOpen(false);
+            }}
+          >
+            <span className="flex size-4 items-center justify-center">{o.id === value && <Check size={14} />}</span>
+            {o.label}
+          </MenuItem>
+        ))}
+      </PopoverContent>
+    </Popover>
+  );
+}
 
-      <td className="px-3 py-2.5">
-        <FlagIcons flags={row.flags} />
-      </td>
-
-      <td className="whitespace-nowrap px-3 py-2.5">{scan ? fmtScan(scan) : <span className={muted}>—</span>}</td>
-
-      <td className="whitespace-nowrap px-3 py-2.5 font-medium">
-        {o.patient ? o.patient.name : <span className="font-normal italic text-slate-400">Unmatched</span>}
-      </td>
-
-      <td className="whitespace-nowrap px-3 py-2.5 text-slate-500">
-        {o.patient ? o.patient.mrn : <span className={muted}>—</span>}
-      </td>
-
-      <td className="whitespace-nowrap px-3 py-2.5">{o.study}</td>
-
-      <td className="whitespace-nowrap px-3 py-2.5">{o.side ?? <span className={muted}>—</span>}</td>
-
-      <td className="whitespace-nowrap px-3 py-2.5">{o.insurer ?? <span className={muted}>—</span>}</td>
-
-      <td className="px-3 py-2.5">
-        <StatusLabel status={o.status} />
-      </td>
-
-      <td className="px-3 py-2.5" onClick={(e) => e.stopPropagation()}>
-        <AssignCell role={row.ownerRole} assigneeId={o.assigneeId} me={me} closed={row.closed} onAssign={onAssign} />
-      </td>
-
-      <td className="tabular whitespace-nowrap py-2.5 pl-3 pr-4 text-right text-slate-500">
-        {row.closed ? <span className={muted}>—</span> : fmtDuration(row.minutesInStatus)}
-      </td>
-    </tr>
+function RemovableChip({ children, onRemove }: { children: React.ReactNode; onRemove: () => void }) {
+  return (
+    <Chip className="gap-1 pr-1">
+      {children}
+      <button type="button" aria-label="Remove filter" onClick={onRemove} className="text-fg-3 hover:text-fg">
+        <X size={14} />
+      </button>
+    </Chip>
   );
 }
