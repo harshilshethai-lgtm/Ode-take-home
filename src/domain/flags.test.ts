@@ -18,7 +18,7 @@ describe("Worklist flags", () => {
 
   it("stacks derived and finding flags, most severe first", () => {
     // Crusher: the office-visit page is blank, and the fax has no scan time.
-    expect(ids(12)).toEqual(["missing_docs"]);
+    expect(ids(12)).toEqual(["missing_docs", "over_sla"]);
   });
 
   it("privacy and coverage findings surface as their own flags", () => {

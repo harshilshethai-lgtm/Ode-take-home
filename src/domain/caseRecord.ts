@@ -23,6 +23,10 @@ export interface CaseElement {
   cite?: Cite;
   /** External system that supplied the value. Shown as a source tag. */
   origin?: "epic" | "demo";
+  /** When an Epic value was last read. */
+  ranAt?: string;
+  /** Low-confidence handwriting. Shown next to the value. */
+  handwritten?: boolean;
   mono?: boolean;
 }
 
@@ -104,6 +108,8 @@ export function primaryLabelFor(order: Order): string | null {
     case "UNREADABLE_DOCUMENT":
     case "NO_MATCH":
       return "Request a clean copy";
+    case "RETURN_TO_PROVIDER":
+      return "Send draft";
     case "CRITERIA_NOT_MET":
     case "RULE_GAP":
     case "CONFIRM_AFTER_FIX":
@@ -186,8 +192,8 @@ function kirkRecord(order: Order): CaseRecord {
     {
       label: "Insurance",
       value: `Federation Health · ${plan} · ${eligibility?.memberId}`,
-      cite: packet(1, "Federation Health"),
       origin: "epic",
+      ranAt: DEMO_NOW.toISOString(),
     },
     {
       label: "Exam",
@@ -283,7 +289,15 @@ function scottRecord(order: Order): CaseRecord {
       {
         label: "Insurance",
         value: "Ferengi Benefit Group · FBG-0047-1979",
-        cite: packet(2, "Ferengi Benefit Group"),
+        cite: packet(2, "FBG-0047-1979"),
+      },
+      {
+        label: "Scan slot",
+        value: "Thu 11/12 · 9:00 AM",
+        cite: packet(1, "Pt scheduled Thurs 11/12 9am. Please rush."),
+        handwritten: true,
+        origin: "epic",
+        ranAt: DEMO_NOW.toISOString(),
       },
       { label: "Exam", value: "MRI R knee · 73721", cite: packet(2, "MRI R knee w/o contrast") },
       { label: "Ordering provider", value: "L. McCoy, MD", cite: packet(2, "L. McCoy") },
@@ -292,6 +306,8 @@ function scottRecord(order: Order): CaseRecord {
     flags: ["Missing pages"],
     extracted: [
       { section: "Cover", label: "Listed", excerpt: "PT notes, Utopia Planitia Rehab, not in the fax.", cite: packet(1, "p.4 PT progress notes, Utopia Planitia Rehab") },
+      { section: "Cover", label: "Slot", excerpt: "Thursday 11/12 at 9:00 AM. Handwritten.", cite: packet(1, "Pt scheduled Thurs 11/12 9am. Please rush.") },
+      { section: "Note", label: "Hold the slot", excerpt: "Keep the Thursday slot.", cite: packet(5, "keep the Thursday slot") },
       { section: "Request", label: "Treatment", excerpt: "PT about 6 weeks, ibuprofen.", cite: packet(2, "PT ~6 wks, ibuprofen") },
       { section: "Office note", label: "Complaint", excerpt: "R knee pain and clicking x 7 wks.", cite: packet(3, "R knee pain and clicking x 7 wks") },
       { section: "Office note", label: "Onset", excerpt: "Twisted the right knee ~9/22.", cite: packet(3, "twisted R knee climbing a ladder at work ~9/22") },
@@ -350,7 +366,7 @@ function suluRecord(order: Order): CaseRecord {
     docId: order.orderNumber!,
     summary: "Right shoulder MRI, routine. Three weeks of pain and one week of therapy are under the six weeks required.",
     summaryCites: [packet(1, "R shoulder pain x 3 wks after fencing."), packet(1, "Started PT last wk.")],
-    primaryLabel: "Review",
+    primaryLabel: "Send draft",
     elements: [
       { label: "Patient", value: "Hikaru Sulu", cite: packet(1, "SULU, HIKARU") },
       {
@@ -362,7 +378,7 @@ function suluRecord(order: Order): CaseRecord {
       {
         label: "Insurance",
         value: `Andorian Life · EPO · ${eligibility?.memberId}`,
-        cite: packet(1, "Andorian Life"),
+        cite: packet(1, "AL-1701-0914"),
       },
       { label: "Exam", value: "MRI shoulder right · 73221", cite: packet(1, "MRI SHOULDER RIGHT WO CONTRAST [73221]") },
       {
@@ -415,7 +431,7 @@ function suluRecord(order: Order): CaseRecord {
     ],
     policyLabel: "IMG-330",
     policyHref: "/settings",
-    missing: ["Shoulder X-ray", "Prior MRI history"],
+    missing: [],
     checks: [
       {
         name: "Eligibility",

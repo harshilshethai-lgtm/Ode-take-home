@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { SEED_ORDERS } from "@/data/orders";
+import { restoreDemoRules } from "@/data/rules";
 import type { StatusId } from "@/domain/statuses";
 import type { Order } from "@/domain/types";
 
@@ -66,6 +67,7 @@ export function OrdersProvider({ children }: { children: ReactNode }) {
   const reset = useCallback(() => {
     setAssignments({});
     setPatches({});
+    restoreDemoRules();
   }, []);
 
   const value = useMemo(() => ({ orders, assign, applyStatus, reset }), [orders, assign, applyStatus, reset]);

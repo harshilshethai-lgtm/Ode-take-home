@@ -566,7 +566,7 @@ describe("status catalog", () => {
 });
 
 function statusFor(code: ReasonCode): OrderStatus {
-  if (code === "UNREADABLE_DOCUMENT" || code === "NO_MATCH" || code === "MISSING_DOCUMENTS" || code === "SIDE_MISMATCH" || code === "WRONG_PATIENT_PAGE" || code === "INSURER_MISMATCH" || code === "CPT_MISMATCH" || code === "PORTAL_UPLOAD" || code === "SUBMISSION_FAILED" || code === "MORE_INFO_REQUESTED" || code === "STATUS_CHECK_FAILED" || code === "APPROVAL_MISMATCH" || code === "WRITEBACK_FAILED") {
+  if (code === "UNREADABLE_DOCUMENT" || code === "NO_MATCH" || code === "MISSING_DOCUMENTS" || code === "SIDE_MISMATCH" || code === "WRONG_PATIENT_PAGE" || code === "INSURER_MISMATCH" || code === "CPT_MISMATCH" || code === "PORTAL_UPLOAD" || code === "MEMBER_ID_MISSING" || code === "RETURN_TO_PROVIDER" || code === "SUBMISSION_FAILED" || code === "MORE_INFO_REQUESTED" || code === "STATUS_CHECK_FAILED" || code === "APPROVAL_MISMATCH" || code === "WRITEBACK_FAILED") {
     return "NEEDS_ADMIN_REVIEW";
   }
   if (code === "CRITERIA_NOT_MET" || code === "RULE_GAP" || code === "CONFIRM_AFTER_FIX" || code === "REPEATED_REQUESTS" || code === "DENIED_DECIDE_APPEAL" || code === "PEER_TO_PEER") {

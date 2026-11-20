@@ -7,13 +7,27 @@ npm install
 npm run dev     # http://localhost:5173
 npm test        # test cases + decision logic
 npm run typecheck
+npm run e2e     # Playwright golden flows, citations, and layout checks
 ```
+
+Production: [ode-platform-chi.vercel.app](https://ode-platform-chi.vercel.app). The same suite runs there with `E2E_BASE_URL=https://ode-platform-chi.vercel.app npm run e2e`.
+
+## Demo script
+
+The clock is fixed (Tue 11/10, 2:00 PM ET). Before each run, open the worklist and click **Reset demo data** so assignments and status edits from the last pass are gone.
+
+1. **Worklist.** Start on the queue. The tabs split every case once (Coordinator, Nurse, Return to provider, In flight, With insurer, Closed). Their counts add up to All. A patient name opens that case in a new tab; the row itself stays in this tab.
+2. **Kirk, no touch.** Open James T. Kirk. He is already Submitted. All 4 insurer criteria are Met. The member ID is tagged [epic]. The insurer timeline has a single submission line.
+3. **Scott, records hold.** Open Montgomery Scott. Status is Chase records. Fax page 4 is the missing PT notes placeholder. The slot is Thu 11/12 and at risk, and there is no Submit action. Conservative care is Not met, Fixable with records. Click the fax p.3 citation: the viewer highlights “about six weeks”.
+4. **Sulu, return to provider.** Open Hikaru Sulu. Status is Return to provider. The summary is the draft for Dr. McCoy (order an X-ray, continue PT, re-order at 6 weeks, release the 11/16 slot). Send draft is the action. Nothing says to chase an X-ray.
+5. **Settings, rule version.** Open Settings, then Federation Health · RAD-114. The header shows the active version (revision and v number). Don't edit it. This step only shows which version Kirk ran against.
+6. **Impact.** Open Pilot impact. The headline number is the same number as the last complete week on its chart, and both match the week fixture.
 
 ## What's built
 
 - **Worklist** (`/`): one line per imaging order, sorted by scan date. Saved views per role, quick filters, search,
   per-row and bulk assignment, time risk, time-in-status vs SLA.
-- **Case view** (`/case/:id`): placeholder. Next up: parsed record on the left, source PDFs on the right.
+- **Case view** (`/case/:id`): checklist and order on the left, the source PDF on the right. Citations open the quoted page.
 
 ## Test cases
 

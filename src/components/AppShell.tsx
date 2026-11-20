@@ -32,12 +32,36 @@ const MAIN_NAV: NavItem[] = [
 const FOOTER_NAV: NavItem[] = [{ to: "/settings", label: "Settings", icon: Settings }];
 
 export default function AppShell() {
-  const [collapsed, setCollapsed] = useState<boolean>(() => localStorage.getItem(COLLAPSE_KEY) === "1");
+  const [storedCollapsed, setStoredCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem(COLLAPSE_KEY) === "1";
+    } catch {
+      return false;
+    }
+  });
   const { pathname } = useLocation();
+  const onCase = pathname.startsWith("/case/");
+  const [caseExpanded, setCaseExpanded] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem(COLLAPSE_KEY, collapsed ? "1" : "0");
-  }, [collapsed]);
+    setCaseExpanded(false);
+  }, [pathname]);
+
+  const collapsed = onCase ? !caseExpanded : storedCollapsed;
+
+  useEffect(() => {
+    if (onCase) return;
+    try {
+      localStorage.setItem(COLLAPSE_KEY, storedCollapsed ? "1" : "0");
+    } catch {
+      /* private mode */
+    }
+  }, [storedCollapsed, onCase]);
+
+  const toggle = () => {
+    if (onCase) setCaseExpanded((value) => !value);
+    else setStoredCollapsed((value) => !value);
+  };
 
   return (
     <div className="flex h-full flex-col sm:flex-row">
@@ -68,7 +92,7 @@ export default function AppShell() {
           </div>
         </nav>
 
-        <SidebarFooter collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
+        <SidebarFooter collapsed={collapsed} onToggle={toggle} />
       </aside>
 
       <div className="min-h-0 min-w-0 flex-1 overflow-auto">

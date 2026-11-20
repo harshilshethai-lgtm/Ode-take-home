@@ -1,12 +1,37 @@
-const dateFmt = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric" });
-const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" });
-const dobFmt = new Intl.DateTimeFormat("en-US", { month: "2-digit", day: "2-digit", year: "numeric" });
+/** Halcyon is Mid-Atlantic. Dates render in that zone, not the laptop's. */
+const TZ = "America/New_York";
 
-const weekdayFmt = new Intl.DateTimeFormat("en-US", { weekday: "short" });
+const dateFmt = new Intl.DateTimeFormat("en-US", { weekday: "short", month: "short", day: "numeric", timeZone: TZ });
+const timeFmt = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit", timeZone: TZ });
+const dobFmt = new Intl.DateTimeFormat("en-US", { month: "2-digit", day: "2-digit", year: "numeric", timeZone: TZ });
+const weekdayFmt = new Intl.DateTimeFormat("en-US", { weekday: "short", timeZone: TZ });
+const monthDayFmt = new Intl.DateTimeFormat("en-US", { month: "numeric", day: "numeric", timeZone: TZ });
+
+function monthDay(d: Date): string {
+  const parts = monthDayFmt.formatToParts(d);
+  const month = Number(parts.find((part) => part.type === "month")?.value);
+  const day = Number(parts.find((part) => part.type === "day")?.value);
+  return `${month}/${day}`;
+}
 
 /** Tables: "Wed 11/18 · 2:30 PM" */
 export function fmtTableDate(d: Date): string {
-  return `${weekdayFmt.format(d)} ${d.getMonth() + 1}/${d.getDate()} · ${timeFmt.format(d)}`;
+  return `${weekdayFmt.format(d)} ${monthDay(d)} · ${timeFmt.format(d)}`;
+}
+
+/** "Tue 11/10" */
+export function fmtWeekdayDate(d: Date): string {
+  return `${weekdayFmt.format(d)} ${monthDay(d)}`;
+}
+
+/** "Mon 11/16, 11:00 AM" */
+export function fmtScanNumeric(d: Date): string {
+  return `${weekdayFmt.format(d)} ${monthDay(d)}, ${timeFmt.format(d)}`;
+}
+
+/** "Mon 11/16 11:00 AM" */
+export function fmtScanTight(d: Date): string {
+  return `${weekdayFmt.format(d)} ${monthDay(d)} ${timeFmt.format(d)}`;
 }
 
 export function fmtDate(d: Date): string {

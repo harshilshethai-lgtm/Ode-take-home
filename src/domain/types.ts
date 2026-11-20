@@ -61,4 +61,8 @@ export interface Order {
   policyRef: string | null;
   /** Pipeline findings shown as flags on the worklist (rule violations, safety, coverage, missing pages). */
   findings?: FindingFlag[];
+  /** The scan time was read from handwriting. Epic may still confirm it. */
+  scheduleHandwritten?: boolean;
+  /** Ferengi-style payers will not accept an incomplete packet. Submit stays off. */
+  submissionBlocked?: boolean;
 }

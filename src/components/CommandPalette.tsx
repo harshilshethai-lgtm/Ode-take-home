@@ -117,7 +117,7 @@ export function CommandPalette() {
               setOpen(false);
             }}
           >
-            <RotateCcw size={14} /> Reset assignments
+            <RotateCcw size={14} /> Reset demo data
           </Item>
         </Command.Group>
       </Command.List>

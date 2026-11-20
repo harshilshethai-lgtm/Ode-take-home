@@ -14,6 +14,9 @@ export interface CriterionOutcome {
   result: CriterionResult;
   failClass: FailClass;
   confidence: number;
+  clinicalKind?: "duration" | "treatment_length" | "other";
+  documentCouldChange?: boolean;
+  pendingDocument?: "never_performed" | "elsewhere";
 }
 
 export interface DecisionInput {
@@ -43,6 +46,9 @@ export function decide(input: DecisionInput): DecisionStatus {
       failureClass: c.result === "not_met" || c.result === "unclear" ? c.failClass : null,
       confidence: c.confidence,
       evidence: null,
+      clinicalKind: c.clinicalKind,
+      documentCouldChange: c.documentCouldChange,
+      pendingDocument: c.pendingDocument,
     })),
     confidenceThreshold: input.confidenceThreshold,
     approvalRequired: true,

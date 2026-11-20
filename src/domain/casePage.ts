@@ -1,10 +1,14 @@
 // Presentation for the case page. Status, reasons and transitions stay in the prior-auth model.
 
 import type { ExtractRow, CaseRecord } from "@/domain/caseRecord";
+import { memberIdFor } from "@/domain/memberId";
 import { actionsFor, type StatusAction } from "@/domain/priorAuth/actions";
 import type { ReasonCode, UserRole } from "@/domain/priorAuth/types";
+import { normalizeProvider } from "@/domain/providers";
 import type { CheckRow, ReviewPanel } from "@/domain/review/types";
 import type { Order } from "@/domain/types";
+import { parseDemoInstant } from "@/lib/demoClock";
+import { fmtTableDate } from "@/lib/format";
 
 export interface CaseButton {
   id: string;
@@ -38,8 +42,12 @@ const WANTED: Partial<Record<ReasonCode, Array<{ id: string; label: string }>>> 
     { id: "correction_made", label: "Correction made" },
   ],
   PORTAL_UPLOAD: [
+    { id: "uploaded", label: "Mark uploaded" },
     { id: "open_packet", label: "Open packet" },
-    { id: "uploaded", label: "Uploaded" },
+  ],
+  RETURN_TO_PROVIDER: [
+    { id: "send_draft", label: "Send draft" },
+    { id: "release_slot", label: "Release slot" },
   ],
   CRITERIA_NOT_MET: [
     { id: "approve_for_submission", label: "Approve for submission" },
@@ -83,29 +91,57 @@ export interface OrderField {
   mono?: boolean;
   muted?: boolean;
   cite?: { docId: string; page: number; quote?: string };
+  origin?: "epic";
+  lastRun?: string;
+  handwritten?: boolean;
+  unparsed?: boolean;
 }
 
 function isCard(row: ExtractRow): boolean {
   return row.section === "Card" || /insurance card/i.test(`${row.label} ${row.excerpt}`);
 }
 
+function ranLabel(iso: string | undefined): string | undefined {
+  if (!iso) return undefined;
+  return fmtTableDate(parseDemoInstant(iso));
+}
+
 export function orderFields(order: Order, record: CaseRecord, panel: ReviewPanel): OrderField[] {
   const provider = record.elements.find((item) => item.label === "Ordering provider");
+  const providerName = provider ? normalizeProvider(provider.value) : null;
+  const slot = record.elements.find((item) => item.label === "Scan slot");
+  const member = memberIdFor(order);
   const card = record.extracted.find(isCard);
   const cardNamed = Boolean(card) || /card/i.test(String(order.detail.source ?? ""));
   const eligibilityFailed = panel.coverage.some((row) => row.id === "CV-1" && row.result === "NOT_MET");
   const pending = order.reasonCode === "INSURER_MISMATCH" || eligibilityFailed;
+  const insurance = [order.insurer, member?.value].filter(Boolean).join(" · ") || "Not on the order";
   const fields: OrderField[] = [
     { label: "Exam", value: [order.study, order.cpt].filter(Boolean).join(" · ") || "Not on the order" },
     { label: "Urgency", value: order.priority },
     {
       label: "Ordering provider",
-      value: provider?.value ?? "Not on the order",
+      value: providerName ? (providerName.parsed ? providerName.detail : providerName.raw) : "Not on the order",
+      unparsed: providerName ? !providerName.parsed : false,
       ...(provider?.cite ? { cite: provider.cite } : {}),
     },
     { label: "MRN", value: order.patient?.mrn ?? "Not on the order", mono: true },
-    { label: "Insurance on order", value: order.insurer ?? "Not on the order" },
+    {
+      label: "Insurance on order",
+      value: insurance,
+      ...(member?.source === "pdf" && member.page ? { cite: { docId: "packet", page: member.page, quote: member.quote } } : {}),
+      ...(member?.source === "epic" ? { origin: "epic" as const, lastRun: ranLabel(member.ranAt) } : {}),
+    },
   ];
+  if (order.scheduledAt) {
+    fields.push({
+      label: "Scan slot",
+      value: fmtTableDate(parseDemoInstant(order.scheduledAt)),
+      handwritten: slot?.handwritten === true || order.scheduleHandwritten === true,
+      ...(slot?.cite ? { cite: slot.cite } : {}),
+      ...(slot?.origin === "epic" ? { origin: "epic" as const, lastRun: ranLabel(slot.ranAt) } : {}),
+    });
+  }
   if (cardNamed) {
     const named = order.detail.insurerB ? String(order.detail.insurerB) : "Card scanned";
     fields.push({ label: "Insurance on card", value: named });

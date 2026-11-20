@@ -27,13 +27,14 @@ describe("fax outreach", () => {
     expect(letter.asks.join(" ")).not.toContain("X-ray");
   });
 
-  it("asks McCoy only for the records Sulu's order never included", () => {
+  it("tells McCoy to order an X-ray and release the slot, and does not chase a report", () => {
     const brief = outreachFor(order("case-3-sulu"))!;
-    const letter = composeFax(brief, ["xray", "prior-mri"], "", "Jasmine Reyes", "Mon, Nov 9", false);
-    expect(letter.paragraphs.join(" ")).toContain("3 weeks");
-    expect(letter.paragraphs.join(" ")).toContain("Do not resend the order");
-    expect(letter.asks).toHaveLength(2);
-    expect(letter.asks.join(" ")).toContain("shoulder X-ray");
+    const letter = composeFax(brief, ["xray", "pt", "reorder", "slot"], "", "Jasmine Reyes", "Mon, Nov 9", false);
+    const text = `${letter.paragraphs.join(" ")} ${letter.asks.join(" ")}`;
+    expect(text).toContain("3 weeks");
+    expect(text.toLowerCase()).toContain("shoulder x-ray");
+    expect(text).toContain("11/16");
+    expect(text.toLowerCase()).not.toContain("chase");
   });
 
   it("asks Crusher's office for page 3 only", () => {

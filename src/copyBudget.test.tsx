@@ -116,8 +116,7 @@ describe("copy budget", () => {
       click(tab);
       assertBudget();
     }
-    // The worklist follows the referral table: study sits where bucket would, so it runs past 8 columns.
-    expect(host.querySelectorAll("thead th").length).toBeLessThanOrEqual(12);
+    expect(host.querySelectorAll("thead th").length).toBeLessThanOrEqual(8);
   });
 
   it("Settings: every section, every row expanded", () => {
@@ -132,7 +131,9 @@ describe("copy budget", () => {
   it("Settings: rule library list, then a policy card with every row expanded", () => {
     render("/settings");
     assertBudget();
-    const rows = [...host.querySelectorAll('nav[aria-label="Settings sections"] ~ div button')].filter((b) => b.textContent?.includes("Active since"));
+    const rows = [...host.querySelectorAll('nav[aria-label="Settings sections"] ~ div button')].filter(
+      (b) => b.textContent?.includes("Active") && /\(v\d+\)/.test(b.textContent ?? ""),
+    );
     expect(rows.length).toBe(3);
     expect(host.textContent).toContain("Recent changes");
     expect(host.textContent).toContain("New policy");
@@ -176,8 +177,9 @@ describe("copy budget", () => {
     expect(host.textContent).toContain("Operations");
     expect(host.textContent).toContain("Illustrative data");
     expect(host.textContent).toContain("Missing docs 2");
-    expect(host.textContent).toContain("Criteria not met 4");
-    expect(host.textContent).toContain("Done today: 1 approved · 2 not required");
+    expect(host.textContent).toContain("Criteria not met 3");
+    expect(host.textContent).toContain("Under 6 weeks 1");
+    expect(host.textContent).toContain("Done today: none");
   });
 
   it("Impact", () => {
@@ -207,7 +209,7 @@ describe("copy budget", () => {
   it("Case: Sulu order", () => {
     render("/case/case-3-sulu");
     expect(host.textContent).toContain("ORD-58258");
-    expect(host.textContent).toContain("x 3 wks");
+    expect(host.textContent).toContain("Ask Dr McCoy to order an X-ray");
     for (const toggle of host.querySelectorAll("button[aria-expanded=false]")) click(toggle);
     assertBudget();
   });
@@ -240,7 +242,7 @@ describe("copy budget", () => {
 
     it("Settings: Operations re-check queue", () => {
       render("/settings");
-      click([...host.querySelectorAll('nav[aria-label="Settings sections"] button')].find((b) => b.textContent === "Operations")!);
+      click([...host.querySelectorAll('nav[aria-label="Settings sections"] a')].find((b) => b.textContent === "Operations")!);
       expect(host.textContent).toContain("Needs re-check");
       for (const toggle of host.querySelectorAll("button[aria-expanded=false]")) click(toggle);
       assertBudget();

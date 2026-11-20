@@ -1,16 +1,18 @@
 import { ChevronRight, Plus } from "lucide-react";
-import { useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { EmptyState } from "@/components/ui/empty-state";
 import { StatusLabel } from "@/components/ui/status-dot";
-import { buildRuleCard, fmtShortDate, versionBadge } from "@/lib/ruleCard";
+import { Tip } from "@/components/ui/tooltip";
+import { isClosed } from "@/domain/statuses";
+import { VERSION_STATUS_LABEL, label } from "@/lib/labels";
+import { buildRuleCard, fmtShortDate, policyVersionLabel } from "@/lib/ruleCard";
 import { useRules } from "@/lib/useRules";
+import { useOrders } from "@/lib/useWorklistState";
 import { CompareView } from "./CompareView";
-import { NewPolicyDialog } from "./NewPolicyDialog";
 import { PolicyCard } from "./PolicyCard";
-import { AssumptionCount } from "./parts";
+import { AssumptionCount, versionTone } from "./parts";
 import { RecentChanges } from "./RecentChanges";
 
 /**
@@ -45,7 +47,6 @@ function useSelection() {
     compare: pair && pair.length === 2 ? ([pair[0], pair[1]] as [string, string]) : null,
     openPolicy: (id: string | null) => set({ policy: id, version: null, edit: false, compare: null }),
     openVersion: (id: string | null, edit = false) => set({ version: id, edit, compare: null }),
-    openDraft: (policyId: string, draftId: string) => set({ policy: policyId, version: draftId, edit: true, compare: null }),
     openPolicyVersion: (policyId: string, versionId: string) => set({ policy: policyId, version: versionId, edit: false, compare: null }),
     openCompare: (policyId: string, a: string, b: string) => set({ policy: policyId, version: null, edit: false, compare: [a, b] }),
     closeCompare: () => set({ compare: null }),
@@ -77,7 +78,6 @@ export function RuleLibrary() {
   ) : (
     <PolicyList
       onOpen={sel.openPolicy}
-      onCreated={(policy, draftId) => sel.openDraft(policy.id, draftId)}
       onCompare={sel.openCompare}
       onOpenVersion={sel.openPolicyVersion}
     />
@@ -87,29 +87,26 @@ export function RuleLibrary() {
 /** One row per policy: payer · policy ID · title · version · assumptions. */
 function PolicyList({
   onOpen,
-  onCreated,
   onCompare,
   onOpenVersion,
 }: {
   onOpen: (id: string) => void;
-  onCreated: (policy: { id: string }, draftId: string) => void;
   onCompare: (policyId: string, a: string, b: string) => void;
   onOpenVersion: (policyId: string, versionId: string) => void;
 }) {
   const rules = useRules();
-  const [creating, setCreating] = useState(false);
   const summaries = rules.listPolicies();
   const today = rules.today();
   return (
     <>
-      <RecentChanges
-        items={rules.listRecentPublishes(10)}
-        onOpen={(r) => (r.previousVersionId ? onCompare(r.policyId, r.previousVersionId, r.versionId) : onOpenVersion(r.policyId, r.versionId))}
-      />
       <div className="mb-2 flex justify-end">
-        <Button variant="default" onClick={() => setCreating(true)}>
-          <Plus size={14} /> New policy
-        </Button>
+        <Tip content="Read-only in prototype">
+          <span className="inline-flex">
+            <Button variant="default" disabled>
+              <Plus size={14} /> New policy
+            </Button>
+          </span>
+        </Tip>
       </div>
       {summaries.length === 0 ? (
         <EmptyState>No policies yet</EmptyState>
@@ -123,14 +120,21 @@ function PolicyList({
                 key={s.policy.id}
                 type="button"
                 onClick={() => onOpen(s.policy.id)}
-                className="group flex h-9 w-full items-center gap-2 border-b border-line px-3 text-left text-body last:border-b-0 hover:bg-hover"
+                className="group flex w-full items-start gap-2 border-b border-line px-3 py-2 text-left text-body last:border-b-0 hover:bg-hover"
               >
-                <ChevronRight size={14} className="shrink-0 text-fg-3" />
-                <span className="shrink-0 whitespace-nowrap text-emph text-fg">
-                  {s.payer.name} · <span className="tabular">{s.policy.externalPolicyId}</span>
+                <ChevronRight size={14} className="mt-1 shrink-0 text-fg-3" />
+                <span className="min-w-0 flex-1">
+                  <span className="text-emph text-fg">
+                    {s.payer.name} · <span className="tabular">{s.policy.externalPolicyId}</span>
+                  </span>
+                  <span className="text-fg-2"> {s.policy.title}</span>
+                  {shown && (
+                    <span className="mt-1 block text-caption tabular text-fg-2">
+                      {policyVersionLabel(s.policy.externalPolicyId, shown.sourceRevisionLabel, shown.versionNumber)}
+                    </span>
+                  )}
                 </span>
-                <span className="min-w-0 truncate text-fg-2">{s.policy.title}</span>
-                <span className="ml-auto flex shrink-0 items-center gap-4 pl-2">
+                <span className="flex shrink-0 items-center gap-4 pl-2">
                   <AssumptionCount count={count} />
                   {s.openDraft && <StatusLabel tone="hold">Draft</StatusLabel>}
                   {s.scheduled && s.scheduled.effectiveFrom && (
@@ -138,14 +142,53 @@ function PolicyList({
                       v{s.scheduled.versionNumber} scheduled · {fmtShortDate(s.scheduled.effectiveFrom, today)}
                     </span>
                   )}
-                  <StatusLabel tone={shown?.derivedStatus === "active" ? "ready" : "neutral"}>{versionBadge(shown)}</StatusLabel>
+                  {shown && (
+                    <StatusLabel tone={versionTone(shown.derivedStatus)}>{label(VERSION_STATUS_LABEL, shown.derivedStatus)}</StatusLabel>
+                  )}
                 </span>
               </button>
             );
           })}
         </Card>
       )}
-      {creating && <NewPolicyDialog open onOpenChange={setCreating} onCreated={onCreated} />}
+      <RuleGaps />
+      <RecentChanges
+        items={rules.listRecentPublishes(10)}
+        onOpen={(r) => (r.previousVersionId ? onCompare(r.policyId, r.previousVersionId, r.versionId) : onOpenVersion(r.policyId, r.versionId))}
+      />
     </>
   );
+}
+
+/** Open cases the engine parked because no policy covers the study. */
+function RuleGaps() {
+  const { orders } = useOrders();
+  const gaps = orders.filter((order) => order.reasonCode === "RULE_GAP" && !isClosed(order.status));
+  if (gaps.length === 0) return null;
+  return (
+    <Card className="mt-4">
+      {gaps.map((order) => {
+        const insurer = textOf(order.detail.insurer) || order.insurer || "Unknown insurer";
+        const cpt = textOf(order.detail.cpt) || order.cpt || "this study";
+        return (
+          <div key={order.id} className="flex flex-wrap items-center gap-2 border-b border-line px-3 py-2 last:border-b-0">
+            <Link to={`/case/${order.id}`} className="text-body text-accent-fg">
+              Rule gap · {insurer}, no rules for {cpt}
+            </Link>
+            <Tip content="Read-only in prototype">
+              <span className="ml-auto inline-flex">
+                <Button variant="secondary" disabled>
+                  Create draft policy from insurer document
+                </Button>
+              </span>
+            </Tip>
+          </div>
+        );
+      })}
+    </Card>
+  );
+}
+
+function textOf(value: string | number | null | undefined): string {
+  return value == null ? "" : String(value);
 }

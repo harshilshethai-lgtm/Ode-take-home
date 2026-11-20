@@ -32,6 +32,8 @@ export interface MetricView {
   tone: "good" | "bad" | "flat";
   window: string;
   annualLine: string;
+  annualDollars: number | null;
+  annualHours: number | null;
 }
 
 export interface GuardrailView {
@@ -60,6 +62,8 @@ export interface ImpactModel {
   guardrails: GuardrailView[];
   total: number | null;
   runRate: number | null;
+  /** Window the run rate was taken from. It is the sum of the card dollar lines. */
+  runRateNote: string;
   levers: LeverView[];
   /** Priced levers only, bottom of the stack first. */
   stack: { id: SeriesKey; name: string; metricId: MetricId }[];
@@ -178,7 +182,9 @@ function viewFor(metric: MetricDef, rows: WeekRow[], range: RangeId, scope: Scop
     delta: baseline == null ? null : fmtDelta(metric, reading.value, baseline),
     tone: baseline == null ? "flat" : deltaTone(metric, reading.value, baseline),
     window: windowCopy(reading.weeks, reading.partial),
-    annualLine: valueLine(annual),
+    annualLine: valueLine(annual, metric.hoursLabel),
+    annualDollars: annual.dollars,
+    annualHours: annual.hours,
   };
 }
 
@@ -265,35 +271,17 @@ export function buildImpactModel(
     return point;
   });
 
+  const dollarLines = cards.map((card) => card.annualDollars).filter((n): n is number => n != null);
+
   return {
     north,
     cards,
     guardrails,
     total: priced.length === 0 ? null : priced.reduce((sum, lever) => sum + (lever.cumulative ?? 0), 0),
-    runRate: runRate(rows, assumptions, scope),
+    runRate: dollarLines.length === 0 ? null : dollarLines.reduce((sum, n) => sum + n, 0),
+    runRateNote: range === "last4" ? "Last 4 weeks" : "At current rates",
     levers,
     stack,
     series,
   };
-}
-
-function runRate(rows: WeekRow[], assumptions: Assumptions, scope: ScopeId): number | null {
-  const monthly = scopedMonthly(assumptions, scope, rows);
-  if (monthly == null) return null;
-  const recent = rows.slice(-4);
-  let total = 0;
-  let any = false;
-  for (const id of LEVER_IDS) {
-    const metric = METRICS[id];
-    const baseline = chartBaseline(metric, rows);
-    const kept = recent.filter((row) => usable(metric, row));
-    const source = kept.length > 0 ? kept : recent;
-    const current = weighted(source, (row) => row[metric.series], scope);
-    if (current == null) continue;
-    const annual = annualize(metric.value({ current, baseline, requests: monthly, assumptions }));
-    if (annual.dollars == null) continue;
-    any = true;
-    total += annual.dollars;
-  }
-  return any ? total : null;
 }

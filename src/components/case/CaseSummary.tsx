@@ -7,9 +7,11 @@ import { Chip } from "@/components/ui/chip";
 import { CitationChip } from "@/components/ui/citation-chip";
 import { DEMO_NOW } from "@/data/orders";
 import { fixByAt } from "@/domain/timeRisk";
+import { parseDemoInstant } from "@/lib/demoClock";
+import { fmtScanTight, fmtWeekdayDate } from "@/lib/format";
 import { ORDER_STATUS_INFO } from "@/domain/priorAuth/catalog";
 import { toOrderStatus } from "@/domain/priorAuth/legacy";
-import { buildCaseSummary, compactTrail, deadlineLine } from "@/domain/priorAuth/summary";
+import { buildCaseSummary, compactTrail } from "@/domain/priorAuth/summary";
 import type { OrderStatus, ProcessingStep, ReasonCode, UserRole } from "@/domain/priorAuth/types";
 import type { CaseRecord, ExtractRow } from "@/domain/caseRecord";
 import type { ReviewPanel } from "@/domain/review/types";
@@ -17,16 +19,13 @@ import { ownerRoleFor } from "@/domain/statuses";
 import type { Order } from "@/domain/types";
 import { cn } from "@/lib/cn";
 
-const WEEKDAY = new Intl.DateTimeFormat("en-US", { weekday: "short" });
-
 function scanLabel(iso: string): string {
-  const at = new Date(iso);
-  const time = new Intl.DateTimeFormat("en-US", { hour: "numeric", minute: "2-digit" }).format(at);
-  return `${WEEKDAY.format(at)} ${at.getMonth() + 1}/${at.getDate()} ${time}`;
+  return fmtScanTight(parseDemoInstant(iso));
 }
 
-function fixLabel(at: Date): string {
-  return `${WEEKDAY.format(at)} ${at.getMonth() + 1}/${at.getDate()}`;
+function fixPhrase(at: Date): string {
+  const day = fmtWeekdayDate(at);
+  return at.getTime() < DEMO_NOW.getTime() ? `past due ${day}` : `fix by ${day}`;
 }
 
 const BANNER: Record<string, string> = {
@@ -80,8 +79,10 @@ export function CaseSummaryCard({
   const [expanded, setExpanded] = useState(false);
   const status = toOrderStatus(order.status);
   const closed = ORDER_STATUS_INFO[status].group === "closed";
-  const scanAt = order.scheduledAt ? new Date(order.scheduledAt) : null;
+  const scanAt = order.scheduledAt ? parseDemoInstant(order.scheduledAt) : null;
   const fixBy = scanAt && !closed ? fixByAt(scanAt, order.insurer) : null;
+  const scanText = scanAt ? `Scan ${scanLabel(order.scheduledAt!)}` : null;
+  const deadline = fixBy ? (scanText ? `${scanText} · ${fixPhrase(fixBy)}` : fixPhrase(fixBy)) : scanText;
   const summary = buildCaseSummary({
     status,
     reason: order.reasonCode,
@@ -90,7 +91,7 @@ export function CaseSummaryCard({
     otherIssues: order.otherIssues,
     role,
     actions: [],
-    deadline: deadlineLine(scanAt ? scanLabel(order.scheduledAt!) : null, fixBy ? fixLabel(fixBy) : null),
+    deadline,
     scanAtRisk: status === "SUBMITTED" && scanAt != null && (scanAt.getTime() - DEMO_NOW.getTime()) / 36e5 <= 24,
     trail: trailFor(order),
   });

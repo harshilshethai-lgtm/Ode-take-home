@@ -25,20 +25,24 @@ describe("case record", () => {
     expect(scott.documents.map((d) => d.file)).toEqual(["scott"]);
     expect(sulu.documents.map((d) => d.file)).toEqual(["sulu"]);
     expect(scott.primaryLabel).toBe("Request records");
-    expect(sulu.primaryLabel).toBe("Review");
+    expect(sulu.primaryLabel).toBe("Send draft");
     expect(scott.criteria.map((c) => c.status)).toEqual(["met", "unknown", "met", "unknown"]);
     expect(sulu.criteria.map((c) => c.status)).toEqual(["not_met", "not_met", "unknown", "unknown"]);
     expect(scott.order.status).toBe("needs_admin_review");
     expect(scott.order.reasonCode).toBe("MISSING_DOCUMENTS");
-    expect(sulu.order.status).toBe("needs_clinical_review");
-    expect(sulu.order.reasonCode).toBe("CRITERIA_NOT_MET");
+    expect(sulu.order.status).toBe("needs_admin_review");
+    expect(sulu.order.reasonCode).toBe("RETURN_TO_PROVIDER");
   });
 
   it("every case opens a different packet", () => {
     const files = new Set<string>();
-    expect(SEED_ORDERS).toHaveLength(23);
+    expect(SEED_ORDERS).toHaveLength(25);
     for (const order of SEED_ORDERS) {
       const docs = buildCaseRecord(order).documents;
+      if (order.status === "processing") {
+        expect(docs, order.id).toHaveLength(0);
+        continue;
+      }
       expect(docs, order.id).toHaveLength(1);
       expect(files.has(docs[0].file), docs[0].file).toBe(false);
       files.add(docs[0].file);

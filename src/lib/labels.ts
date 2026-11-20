@@ -28,10 +28,36 @@ export const SOURCE_TYPE_LABEL: Record<SourceType, string> = {
 export const CRITERION_STATUS_LABEL: Record<CriterionStatus, string> = {
   met: "Met",
   not_met: "Not met",
-  unknown: "Unknown",
+  unknown: "Missing info",
   needs_review: "Needs review",
   waived: "Waived",
 };
+
+/** Lowercase count words for the checklist verdict ("1 not met · 1 missing info"). */
+export const CRITERION_STATUS_COUNT: Record<CriterionStatus, string> = {
+  met: "met",
+  not_met: "not met",
+  unknown: "missing info",
+  needs_review: "needs review",
+  waived: "waived",
+};
+
+/**
+ * Sub-tag on a Not met row. fixable means a record could change the result.
+ * The engine's failure type is the source; the UI does not decide which applies.
+ */
+export const NOT_MET_TAG: Record<"clinical" | "fixable", string> = {
+  clinical: "Clinical",
+  fixable: "Fixable with records",
+};
+
+/** "MSK-207 · Rev. 3 (v1)". Revision is the insurer's label; vN is our rule-store version. */
+export function policyVersionLabel(externalId: string, revision: string | null | undefined, versionNumber: number): string {
+  const version = `(v${versionNumber})`;
+  const id = externalId.trim();
+  if (!revision?.trim()) return `${id} ${version}`;
+  return `${id} · ${revision.trim()} ${version}`;
+}
 
 export const OVERALL_LABEL: Record<EvaluationOverall, string> = {
   approve_ready: "Approve ready",

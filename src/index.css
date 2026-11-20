@@ -67,6 +67,8 @@
 
 /* Order and documents sit side by side only when the case column itself has room. */
 @custom-variant case (@container case (min-width: 680px));
+/* Property grids inside that column drop to one column when the pane is narrow. */
+@custom-variant fields (@container case (min-width: 480px));
 
 @utility w-pane {
   width: 440px;
@@ -82,26 +84,34 @@
   --accent-bg: color-mix(in oklab, var(--color-indigo-600) 14%, white);
   --accent-line: color-mix(in oklab, var(--color-indigo-600) 36%, white);
   --fg: var(--color-zinc-900);
-  --fg-2: var(--color-zinc-500);
-  --fg-3: var(--color-zinc-400);
+  /* zinc-600 and zinc-500 clear WCAG AA for 13px and 12px on white. zinc-400 does not. */
+  --fg-2: var(--color-zinc-600);
+  --fg-3: var(--color-zinc-500);
   --label: var(--color-zinc-700);
-  --hover: var(--color-zinc-50);
+  /* One step darker than the sidebar so the selected nav item is visible on zinc-50. */
+  --hover: var(--color-zinc-100);
   --chip: var(--color-zinc-100);
   --chip-fg: var(--color-zinc-600);
   --accent: var(--color-indigo-600);
   --accent-fg: var(--color-indigo-600);
   --on-accent: #ffffff;
   --scrim: rgb(0 0 0 / 0.2);
-  --status-system: var(--color-blue-700);
-  --status-system-bg: color-mix(in oklab, var(--color-blue-500) 14%, white);
-  --status-coordinator: var(--color-orange-700);
-  --status-coordinator-bg: color-mix(in oklab, var(--color-orange-500) 16%, white);
-  --status-nurse: var(--color-teal-700);
-  --status-nurse-bg: color-mix(in oklab, var(--color-teal-500) 14%, white);
+  --status-system: var(--color-zinc-600);
+  --status-system-bg: var(--color-zinc-100);
+  --status-coordinator: var(--color-amber-700);
+  --status-coordinator-bg: color-mix(in oklab, var(--color-amber-500) 16%, white);
+  --status-nurse: var(--color-violet-700);
+  --status-nurse-bg: color-mix(in oklab, var(--color-violet-500) 14%, white);
   --status-approved: var(--color-green-700);
   --status-approved-bg: color-mix(in oklab, var(--color-green-500) 14%, white);
   --status-denied: var(--color-red-700);
   --status-denied-bg: color-mix(in oklab, var(--color-red-500) 12%, white);
+  /* 6px status dots. Darker than the 500 ramp so each clears 3:1 on white. */
+  --dot-ready: var(--color-green-700);
+  --dot-hold: var(--color-amber-700);
+  --dot-blocked: var(--color-red-600);
+  --dot-review: var(--color-violet-600);
+  --dot-neutral: var(--color-zinc-500);
 
   /* Pilot impact charts. One accent, faded for fills and secondary lines. */
   --good: var(--color-green-600);
@@ -138,8 +148,8 @@
   --accent-bg: color-mix(in oklab, var(--color-indigo-400) 22%, var(--color-zinc-900));
   --accent-line: color-mix(in oklab, var(--color-indigo-400) 46%, var(--color-zinc-900));
   --fg: var(--color-zinc-100);
-  --fg-2: var(--color-zinc-400);
-  --fg-3: var(--color-zinc-500);
+  --fg-2: var(--color-zinc-300);
+  --fg-3: var(--color-zinc-400);
   --label: var(--color-zinc-300);
   --hover: color-mix(in oklab, var(--color-zinc-800) 60%, transparent);
   --chip: var(--color-zinc-800);
@@ -147,16 +157,21 @@
   --accent: var(--color-indigo-600);
   --accent-fg: var(--color-indigo-400);
   --scrim: rgb(0 0 0 / 0.5);
-  --status-system: var(--color-blue-300);
-  --status-system-bg: color-mix(in oklab, var(--color-blue-500) 22%, black);
-  --status-coordinator: var(--color-orange-300);
-  --status-coordinator-bg: color-mix(in oklab, var(--color-orange-500) 22%, black);
-  --status-nurse: var(--color-teal-300);
-  --status-nurse-bg: color-mix(in oklab, var(--color-teal-500) 22%, black);
+  --status-system: var(--color-zinc-300);
+  --status-system-bg: color-mix(in oklab, var(--color-zinc-400) 18%, black);
+  --status-coordinator: var(--color-amber-300);
+  --status-coordinator-bg: color-mix(in oklab, var(--color-amber-500) 22%, black);
+  --status-nurse: var(--color-violet-300);
+  --status-nurse-bg: color-mix(in oklab, var(--color-violet-500) 22%, black);
   --status-approved: var(--color-green-300);
   --status-approved-bg: color-mix(in oklab, var(--color-green-500) 22%, black);
   --status-denied: var(--color-red-300);
   --status-denied-bg: color-mix(in oklab, var(--color-red-500) 22%, black);
+  --dot-ready: var(--color-green-400);
+  --dot-hold: var(--color-amber-400);
+  --dot-blocked: var(--color-red-400);
+  --dot-review: var(--color-violet-400);
+  --dot-neutral: var(--color-zinc-400);
   --good: var(--color-green-400);
   --bad: var(--color-red-400);
   --age-1: color-mix(in oklab, var(--accent) 28%, var(--panel));
@@ -200,6 +215,11 @@
   --color-status-approved-bg: var(--status-approved-bg);
   --color-status-denied: var(--status-denied);
   --color-status-denied-bg: var(--status-denied-bg);
+  --color-dot-ready: var(--dot-ready);
+  --color-dot-hold: var(--dot-hold);
+  --color-dot-blocked: var(--dot-blocked);
+  --color-dot-review: var(--dot-review);
+  --color-dot-neutral: var(--dot-neutral);
   --color-good: var(--good);
   --color-bad: var(--bad);
   --color-warning: var(--warning);
@@ -353,7 +373,7 @@ svg.lucide {
   background: rgb(250 204 21 / 0.45);
 }
 .cite-box.pulse {
-  animation: cite-box-in 500ms ease-out;
+  animation: cite-box-in 600ms ease-out;
 }
 @keyframes cite-box-in {
   from {

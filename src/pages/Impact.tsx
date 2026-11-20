@@ -2,14 +2,14 @@ import { useMemo, useState } from "react";
 import { AssumptionsForm } from "@/components/impact/assumptions-form";
 import { DeltaChip } from "@/components/impact/delta-chip";
 import { MetricChart } from "@/components/impact/metric-chart";
-import { MetricInfo } from "@/components/impact/metric-info";
+import { InfoButton, MetricInfo } from "@/components/impact/metric-info";
 import { Segmented } from "@/components/impact/segmented";
 import { ValueChart } from "@/components/impact/value-chart";
 import { Chip } from "@/components/ui/chip";
 import { PageTitle } from "@/components/ui/page-title";
 import { StatusDot } from "@/components/ui/status-dot";
 import { DEFAULT_ASSUMPTIONS, NEEDS_DATA_LABEL, type Assumptions } from "@/data/impact/metrics";
-import { WEEKS } from "@/data/impact/weeks";
+import { PHASES, WEEKS } from "@/data/impact/weeks";
 import { buildImpactModel, type MetricView, type RangeId, type ScopeId } from "@/domain/impact/compute";
 import { directionCaption, fmtMoney } from "@/domain/impact/format";
 import { cn } from "@/lib/cn";
@@ -41,6 +41,19 @@ export default function Impact() {
           <Segmented label="Time range" value={range} options={RANGES} onChange={setRange} />
           <Segmented label="Hospitals" value={scope} options={SCOPES} onChange={setScope} />
           <Chip>Illustrative data</Chip>
+          <span className="inline-flex items-center gap-1 text-caption text-fg-3">
+            Shadow → Assisted → Expand
+            <InfoButton label="Pilot phases">
+              <div className="flex flex-col gap-2">
+                {PHASES.map((phase) => (
+                  <div key={phase.id}>
+                    <div className="text-fg">{phase.label}</div>
+                    <div>{phase.note}</div>
+                  </div>
+                ))}
+              </div>
+            </InfoButton>
+          </span>
         </div>
       </div>
 
@@ -96,7 +109,7 @@ export default function Impact() {
             <div className={cn("text-section tabular", model.runRate == null ? "text-fg-3" : "text-fg")}>
               {model.runRate == null ? NEEDS_DATA_LABEL : `${fmtMoney(model.runRate)}/yr`}
             </div>
-            <div className="text-caption text-fg-3">Run rate, last 4 weeks</div>
+            <div className="text-caption text-fg-3">{model.runRateNote}</div>
           </div>
         </div>
         {model.stack.length > 0 && (
@@ -123,7 +136,7 @@ export default function Impact() {
         ))}
       </div>
 
-      <AssumptionsForm value={assumptions} onChange={setAssumptions} />
+      <AssumptionsForm value={assumptions} onChange={setAssumptions} model={model} />
     </main>
   );
 }

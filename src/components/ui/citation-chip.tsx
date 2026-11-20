@@ -1,5 +1,13 @@
+import { createContext, useContext, type ReactNode } from "react";
 import { cn } from "@/lib/cn";
 import { Tip } from "./tooltip";
+
+/** Case page supplies this so a fax chip reads "fax p.5" instead of the PDF index. */
+const CiteFormatContext = createContext<((page: number) => string) | null>(null);
+
+export function CiteFormatProvider({ format, children }: { format: (page: number) => string; children: ReactNode }) {
+  return <CiteFormatContext.Provider value={format}>{children}</CiteFormatContext.Provider>;
+}
 
 interface Props {
   /** 1-based page in the source PDF. */
@@ -14,6 +22,7 @@ interface Props {
 
 /** "p.3": opens the source PDF at that page. Every value from a PDF carries one. */
 export function CitationChip({ page, excerpt, label, onOpen, className }: Props) {
+  const format = useContext(CiteFormatContext);
   return (
     <Tip content={excerpt ? `“${excerpt}”` : `Open page ${page}`}>
       <button
@@ -25,7 +34,7 @@ export function CitationChip({ page, excerpt, label, onOpen, className }: Props)
           className,
         )}
       >
-        {label ?? `p.${page}`}
+        {label ?? (format ? format(page) : `p.${page}`)}
       </button>
     </Tip>
   );

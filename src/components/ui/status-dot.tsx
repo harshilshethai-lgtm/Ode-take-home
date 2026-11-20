@@ -5,11 +5,11 @@ import { cn } from "@/lib/cn";
 export type StatusTone = "ready" | "hold" | "blocked" | "review" | "neutral";
 
 const TONE_BG: Record<StatusTone, string> = {
-  ready: "bg-green-500",
-  hold: "bg-amber-500",
-  blocked: "bg-red-500",
-  review: "bg-violet-500",
-  neutral: "bg-zinc-400",
+  ready: "bg-dot-ready",
+  hold: "bg-dot-hold",
+  blocked: "bg-dot-blocked",
+  review: "bg-dot-review",
+  neutral: "bg-dot-neutral",
 };
 
 export function StatusDot({ tone, className }: { tone: StatusTone; className?: string }) {

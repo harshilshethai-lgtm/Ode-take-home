@@ -2,7 +2,9 @@ import {
   Area,
   CartesianGrid,
   ComposedChart,
+  Customized,
   Line,
+  ReferenceArea,
   ReferenceLine,
   Tooltip,
   XAxis,
@@ -12,7 +14,7 @@ import {
   useYAxisScale,
 } from "recharts";
 import type { MetricDef } from "@/data/impact/metrics";
-import { WEEK_TICKS, type WeekRow } from "@/data/impact/weeks";
+import { WEEK_MAX, WEEK_TICKS, type WeekRow } from "@/data/impact/weeks";
 import type { ScopeId } from "@/domain/impact/compute";
 import { scopedSample } from "@/domain/impact/compute";
 import { fmtDelta, formatMetric, formatTick, unitLabel } from "@/domain/impact/format";
@@ -49,13 +51,16 @@ export function MetricChart({
   target: number | null;
 }) {
   const points = toPoints(metric, rows, scope, baseline);
+  const headline = [...points].reverse().find((point) => !point.hollow) ?? points[points.length - 1];
+  const firstHollow = points.find((point) => point.hollow);
   const showTarget = target != null && (baseline == null || Math.abs(target - baseline) > (metric.unit === "percent" ? 0.004 : 0.05));
   const domainValues = points.flatMap((point) => [point.value, point.wouldHave, point.band?.[0], point.band?.[1], baseline, target]);
   const scale = yScale(
     domainValues.filter((n): n is number => n != null),
     metric.unit,
   );
-  const summary = `${metric.name}, ${points[points.length - 1]?.valueText ?? ""}`;
+  const summary = `${metric.name}, ${headline?.valueText ?? ""}`;
+  const hatchId = `incomplete-${metric.id}`;
 
   return (
     <div className="h-full w-full min-w-0">
@@ -66,6 +71,16 @@ export function MetricChart({
         margin={CHART_MARGIN}
         style={{ width: "100%", height: "100%", fontFamily: "var(--font-sans)" }}
       >
+        <Customized component={() => <IncompleteHatch id={hatchId} />} />
+        {firstHollow && (
+          <ReferenceArea
+            x1={firstHollow.week - 0.5}
+            x2={WEEK_MAX + 0.5}
+            fill={`url(#${hatchId})`}
+            stroke="none"
+            ifOverflow="hidden"
+          />
+        )}
         <PhaseBands />
         <CartesianGrid vertical={false} stroke="var(--line)" />
         <XAxis
@@ -156,7 +171,7 @@ export function MetricChart({
           <Line
             dataKey="dashed"
             stroke="var(--accent)"
-            strokeDasharray="3 3"
+            strokeDasharray="1 3"
             strokeWidth={1.5}
             dot={hollowDot}
             activeDot={false}
@@ -168,9 +183,11 @@ export function MetricChart({
         {baseline != null && <RuleLabel y={baseline} text={`Baseline ${formatMetric(metric, baseline)}`} align="start" />}
         {showTarget && target != null && <RuleLabel y={target} text={`Target ${formatMetric(metric, target)}`} align="start" />}
         <EndLabels
-          point={points[points.length - 1]}
+          point={headline}
+          tail={firstHollow ? points[points.length - 1] : undefined}
           callout={widestGap(points)}
           metricLabel={metric.counterfactual?.label ?? null}
+          bandPoint={points[points.length - 1]}
           bandLabel={metric.band?.label ?? null}
         />
       </ComposedChart>
@@ -186,7 +203,10 @@ export function MetricChart({
         <tbody>
           {points.map((point) => (
             <tr key={point.week}>
-              <td>W{point.week}</td>
+              <td>
+                W{point.week}
+                {point.hollow ? " incomplete" : ""}
+              </td>
               <td>{point.valueText}</td>
               <td>{point.n}</td>
             </tr>
@@ -287,15 +307,29 @@ function widestGap(points: ChartPoint[]): ChartPoint | null {
   return best;
 }
 
+function IncompleteHatch({ id }: { id: string }) {
+  return (
+    <defs>
+      <pattern id={id} width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+        <line x1="0" y1="0" x2="0" y2="6" stroke="var(--fg-3)" strokeWidth="1" />
+      </pattern>
+    </defs>
+  );
+}
+
 function EndLabels({
   point,
+  tail,
   callout,
   metricLabel,
+  bandPoint,
   bandLabel,
 }: {
   point: ChartPoint | undefined;
+  tail?: ChartPoint;
   callout: ChartPoint | null;
   metricLabel: string | null;
+  bandPoint: ChartPoint | undefined;
   bandLabel: string | null;
 }) {
   const xScale = useXAxisScale();
@@ -306,19 +340,28 @@ function EndLabels({
   if (x == null || y == null) return null;
   const callX = callout ? xScale(callout.week) : null;
   const callY = callout?.wouldHave == null ? null : yScale(callout.wouldHave);
-  const bandMid = point.band == null ? null : yScale((point.band[0] + point.band[1]) / 2);
+  const band = bandPoint?.band;
+  const bandX = bandPoint ? xScale(bandPoint.week) : null;
+  const bandMid = band == null ? null : yScale((band[0] + band[1]) / 2);
+  const tailX = tail ? xScale(tail.week) : null;
+  const tailY = tail ? yScale(tail.value) : null;
   return (
     <g>
       <text x={x + 8} y={y} fill="var(--fg)" fontSize={12} dominantBaseline="central">
         {point.valueText}
       </text>
+      {tail && tailX != null && tailY != null && (
+        <text x={tailX + 8} y={tailY - 12} fill="var(--fg-3)" fontSize={12}>
+          Incomplete
+        </text>
+      )}
       {metricLabel && callX != null && callY != null && (
         <text x={callX + 8} y={callY - 10} fill="var(--fg-2)" fontSize={12}>
           {metricLabel}
         </text>
       )}
-      {bandLabel && bandMid != null && (
-        <text x={x - 8} y={bandMid} textAnchor="end" fill="var(--fg-3)" fontSize={12} dominantBaseline="central">
+      {bandLabel && bandX != null && bandMid != null && (
+        <text x={bandX - 8} y={bandMid} textAnchor="end" fill="var(--fg-3)" fontSize={12} dominantBaseline="central">
           {bandLabel}
         </text>
       )}

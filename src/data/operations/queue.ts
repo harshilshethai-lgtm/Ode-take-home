@@ -48,6 +48,8 @@ export function queueOwner(status: StatusId, _autonomy: Autonomy): QueueOwner | 
 /** Grey reason line under an owner row, in chip order. */
 export const REASON_ORDER: ReasonCode[] = [
   "MISSING_DOCUMENTS",
+  "RETURN_TO_PROVIDER",
+  "MEMBER_ID_MISSING",
   "UNREADABLE_DOCUMENT",
   "NO_MATCH",
   "SIDE_MISMATCH",

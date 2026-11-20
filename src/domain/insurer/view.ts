@@ -1,4 +1,5 @@
 import type { Order } from "@/domain/types";
+import { nextCheckLabel } from "@/lib/demoClock";
 import { fmtTableDate } from "@/lib/format";
 import { channelBadge, NORMALIZED_LABEL } from "./normalize";
 import { readTrack } from "./runner";
@@ -108,9 +109,9 @@ export function buildInsurerPanel(args: {
     submittedLabel: submission ? fmtTableDate(new Date(submission.finishedAt)) : null,
     submittedBy: submission?.actor === "system" ? "System" : submission?.actor ?? "System",
     latestLabel: latest?.normalized ? NORMALIZED_LABEL[latest.normalized] : null,
-    latestRaw: latest ? quote(latest.rawResponse) : null,
+    latestRaw: latestRawText(latest),
     lastCheckedLabel: lastCheck ? fmtTableDate(new Date(lastCheck.finishedAt)) : null,
-    nextCheckLabel: args.nextCheckAt ? fmtTableDate(new Date(args.nextCheckAt)) : null,
+    nextCheckLabel: args.nextCheckAt ? nextCheckLabel(args.nextCheckAt) : null,
     approval: args.approval
       ? {
           number: args.approval.number,
@@ -123,7 +124,7 @@ export function buildInsurerPanel(args: {
       : null,
     sent: sent.map((item) => ({ label: item.docId, pages: item.pages.join(", ") })),
     packetUrl: args.packetUrl ?? null,
-    timeline: collapse(args.interactions).map((entry) => {
+    timeline: dedupeResults(collapse(args.interactions).map((entry) => {
       if ("collapsed" in entry) {
         const last = entry.collapsed[0];
         return {
@@ -143,7 +144,7 @@ export function buildInsurerPanel(args: {
         screenshotUrl: entry.screenshotUrl,
         error: entry.error ? `${ERROR_WORD[entry.error.type] ?? "Error"}` : undefined,
       };
-    }),
+    })),
     appeal: args.denialReason
       ? {
           reason: args.denialReason,
@@ -154,6 +155,26 @@ export function buildInsurerPanel(args: {
         }
       : null,
   };
+}
+
+function latestRawText(latest: InsurerInteraction | undefined): string | null {
+  if (!latest) return null;
+  const raw = quote(latest.rawResponse).trim();
+  const label = latest.normalized ? NORMALIZED_LABEL[latest.normalized] : null;
+  if (!raw) return null;
+  if (label && raw.toLowerCase() === label.toLowerCase()) return null;
+  if (latest.normalized && raw.toLowerCase() === latest.normalized.toLowerCase()) return null;
+  return raw;
+}
+
+function dedupeResults(rows: InsurerTimelineRow[]): InsurerTimelineRow[] {
+  const out: InsurerTimelineRow[] = [];
+  for (const row of rows) {
+    const prev = out[out.length - 1];
+    if (prev && prev.result === row.result) continue;
+    out.push(row);
+  }
+  return out;
 }
 
 const ERROR_WORD: Record<string, string> = {

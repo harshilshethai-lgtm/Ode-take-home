@@ -1,15 +1,22 @@
 import { actionsFor, type ActionRequirement, type StatusAction } from "./actions";
 import { ORDER_STATUS_INFO, PROCESSING_SLA_MINUTES, isClosedOrder, ownerRole } from "./catalog";
 import { reasonChip } from "./reasons";
-import type { OrderSnapshot, OrderStatus, PillTone, ReasonCode, UserRole } from "./types";
+import type { OrderSnapshot, OrderStatus, PillTone, ProcessingStep, ReasonCode, UserRole } from "./types";
+
+/** The worklist status is the owner's action. The reason column says why. */
+export function actionStatusLabel(reason: ReasonCode | null): string | null {
+  if (reason === "MISSING_DOCUMENTS") return "Chase records";
+  if (reason === "RETURN_TO_PROVIDER") return "Return to provider";
+  return null;
+}
 
 export type SavedView = "admin" | "clinical" | "in_flight" | "with_insurer" | "closed";
 
 export const SAVED_VIEWS: { id: SavedView; label: string; hint: string }[] = [
   { id: "admin", label: "Admin queue", hint: "Paperwork, portal uploads and insurer requests" },
   { id: "clinical", label: "Clinical queue", hint: "Criteria, rule gaps and denials to decide" },
-  { id: "in_flight", label: "In flight", hint: "The pipeline is working, or the insurer has it" },
-  { id: "with_insurer", label: "With insurer", hint: "Awaiting, pended and appeal" },
+  { id: "in_flight", label: "In flight", hint: "AI processing, auto-submit, or a portal upload still running" },
+  { id: "with_insurer", label: "With insurer", hint: "Submitted and waiting on a decision" },
   { id: "closed", label: "Closed", hint: "Approved, not required, denied or cancelled" },
 ];
 
@@ -22,7 +29,7 @@ export interface StatusPresentation {
 
 export function presentStatus(order: Pick<OrderSnapshot, "status" | "reason" | "linkedApproval">): StatusPresentation {
   return {
-    label: ORDER_STATUS_INFO[order.status].label,
+    label: actionStatusLabel(order.reason) ?? ORDER_STATUS_INFO[order.status].label,
     tone: pillTone(order.status),
     dashed: order.status === "CANCELLED",
     chip: order.status === "PROCESSING" || !order.reason ? null : reasonChip(order.reason),
@@ -112,15 +119,16 @@ function requirementMet(requirement: ActionRequirement, input: ActionInput): boo
   }
 }
 
-export function inSavedView(args: { status: OrderStatus; view: SavedView }): boolean {
-  const { status, view } = args;
+export function inSavedView(args: { status: OrderStatus; reason?: ReasonCode | null; step?: ProcessingStep | null; view: SavedView }): boolean {
+  const { status, reason, step, view } = args;
   switch (view) {
     case "admin":
       return status === "NEEDS_ADMIN_REVIEW";
     case "clinical":
       return status === "NEEDS_CLINICAL_REVIEW";
     case "in_flight":
-      return status === "PROCESSING" || status === "SUBMITTED";
+      // Still inside Halcyon: the model is reading, an API submit is in progress, or a portal upload has started.
+      return status === "PROCESSING" || (status === "NEEDS_ADMIN_REVIEW" && reason === "PORTAL_UPLOAD" && step === "SUBMITTING");
     case "with_insurer":
       return status === "SUBMITTED";
     case "closed":
