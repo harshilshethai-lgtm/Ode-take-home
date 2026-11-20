@@ -1,5 +1,5 @@
 import { Command } from "cmdk";
-import { BarChart3, FileText, Home, Moon, RotateCcw, Settings, Sun, User } from "lucide-react";
+import { BarChart3, FileText, Home, Moon, RotateCcw, Settings, Sun, TrendingUp, User } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { Kbd } from "@/components/ui/kbd";
@@ -90,8 +90,11 @@ export function CommandPalette() {
           <Item value="worklist home" onSelect={() => go("/")}>
             <Home size={14} /> Worklist
           </Item>
-          <Item value="analytics" onSelect={() => go("/analytics")}>
-            <BarChart3 size={14} /> Analytics
+          <Item value="impact pilot" onSelect={() => go("/impact")}>
+            <TrendingUp size={14} /> Impact
+          </Item>
+          <Item value="operations analytics" onSelect={() => go("/analytics")}>
+            <BarChart3 size={14} /> Operations
           </Item>
           <Item value="settings rules" onSelect={() => go("/settings")}>
             <Settings size={14} /> Settings

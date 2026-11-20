@@ -80,9 +80,19 @@ export const CRITERION_KEY_LABEL: Record<string, string> = {
 
 export const BODY_SITE_LABEL: Record<string, string> = {
   lumbar_spine: "Lumbar spine",
+  cervical_spine: "Cervical spine",
+  thoracic_spine: "Thoracic spine",
   knee: "Knee",
   shoulder: "Shoulder",
+  hip: "Hip",
+  ankle: "Ankle",
+  wrist: "Wrist",
+  elbow: "Elbow",
+  brain: "Brain",
+  abdomen: "Abdomen",
 };
+
+export const STUDY_TYPE_LABEL: Record<string, string> = { xray: "X-ray", mri: "MRI", ct: "CT", ultrasound: "Ultrasound" };
 
 /* ------------------------------- Case layer ------------------------------- */
 
@@ -165,3 +175,56 @@ export const RULE_LINE: Record<string, string> = {
 };
 
 export const FAIL_CLASS_LABEL: Record<string, string> = { clinical: "Clinical", documents: "Fixable" };
+
+/* ------------------------------- Rule library ------------------------------- */
+
+/** Why a criterion can fail. clinical = the patient doesn't meet it; fixable = paperwork or a test can fix it. */
+export const FAILURE_TYPE_LABEL: Record<string, string> = { clinical: "Clinical", fixable: "Fixable" };
+
+/** Plural source names for "Accepts" and "Excludes" rows, keyed by the engine's source types. */
+export const ACCEPTED_SOURCE_LABEL: Record<string, string> = {
+  pt_note: "PT notes",
+  clinic_note_treating_provider: "Clinic notes",
+  injection_record: "Injection record",
+  pharmacy_record: "Med list",
+  imaging_report: "Imaging reports",
+  patient_reported: "Patient-reported",
+};
+
+export const CHANNEL_LABEL: Record<string, string> = { api: "API", portal: "Portal", fax: "Fax" };
+
+export const INCOMPLETE_HANDLING_LABEL: Record<string, string> = {
+  amendable: "Can amend",
+  deny_resubmit_new: "Resubmit as new",
+  unspecified: "Not specified",
+};
+
+export const VERSION_STATUS_LABEL: Record<string, string> = {
+  draft: "Draft",
+  scheduled: "Scheduled",
+  active: "Active",
+  superseded: "Superseded",
+  archived: "Archived",
+};
+
+/** What a property check verifies, as picked in the editor. */
+export const CHECK_OP_LABEL: Record<string, string> = {
+  min_weeks: "At least N weeks",
+  within_months: "Within N months",
+  source_in: "Only from these sources",
+  source_not_in: "Not from these sources",
+  same_side: "Same side",
+  present: "Must be documented",
+  absent: "Must not be on file",
+};
+
+/** The kinds of fact a check can read (domain/rules/facts.ts). */
+export const FACT_KIND_LABEL: Record<string, string> = {
+  symptom_onset: "Symptom onset",
+  conservative_treatment: "Conservative treatment",
+  treatment_response: "Treatment response",
+  xray: "X-ray",
+  mri: "MRI",
+  ct: "CT",
+  imaging_history_reviewed: "Imaging history review",
+};

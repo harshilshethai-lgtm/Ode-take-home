@@ -42,8 +42,8 @@ export function DataTable<T>({ columns, rows, getKey, selectedKey, onRowClick, r
             <th
               key={c.id}
               scope="col"
-              className={cn(
-                "h-8 whitespace-nowrap border-l-2 border-transparent px-3 text-caption font-normal text-fg-2",
+                className={cn(
+                "sticky top-0 z-10 h-8 whitespace-nowrap border-l-2 border-transparent bg-panel px-3 text-caption font-normal text-fg-2",
                 i === 0 && "pl-4",
                 c.align === "right" && "text-right",
                 c.width,
@@ -81,7 +81,7 @@ export function DataTable<T>({ columns, rows, getKey, selectedKey, onRowClick, r
                 aria-selected={selected}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 className={cn(
-                  "group h-9 border-b border-line transition-colors hover:bg-hover",
+                  "group h-9 border-b border-line transition-colors last:border-b-0 hover:bg-hover",
                   onRowClick && "cursor-pointer",
                   selected && "bg-hover",
                   rowClassName?.(row),

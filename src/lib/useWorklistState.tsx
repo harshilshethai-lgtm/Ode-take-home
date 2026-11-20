@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 import { SEED_ORDERS } from "@/data/orders";
+import type { StatusId } from "@/domain/statuses";
 import type { Order } from "@/domain/types";
 
 const KEY = "halcyon.assignments.v1";
@@ -14,9 +15,18 @@ function load(): Assignments {
   }
 }
 
+export interface StatusPatch {
+  status: StatusId;
+  reason: string;
+  statusSince: string;
+  confirmOnly?: boolean;
+  linkedApproval?: boolean;
+}
+
 interface OrdersCtx {
   orders: Order[];
   assign: (ids: string[], personId: string | null) => void;
+  applyStatus: (id: string, patch: StatusPatch) => void;
   reset: () => void;
 }
 
@@ -25,14 +35,20 @@ const Ctx = createContext<OrdersCtx | null>(null);
 /** Orders with locally-persisted assignments applied. Shared so the command palette can reset them too. */
 export function OrdersProvider({ children }: { children: ReactNode }) {
   const [assignments, setAssignments] = useState<Assignments>(load);
+  const [patches, setPatches] = useState<Record<string, StatusPatch>>({});
 
   useEffect(() => {
     localStorage.setItem(KEY, JSON.stringify(assignments));
   }, [assignments]);
 
   const orders: Order[] = useMemo(
-    () => SEED_ORDERS.map((o) => (o.id in assignments ? { ...o, assigneeId: assignments[o.id] } : o)),
-    [assignments],
+    () =>
+      SEED_ORDERS.map((o) => ({
+        ...o,
+        ...(o.id in assignments ? { assigneeId: assignments[o.id] } : {}),
+        ...patches[o.id],
+      })),
+    [assignments, patches],
   );
 
   const assign = useCallback((ids: string[], personId: string | null) => {
@@ -43,9 +59,16 @@ export function OrdersProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const reset = useCallback(() => setAssignments({}), []);
+  const applyStatus = useCallback((id: string, patch: StatusPatch) => {
+    setPatches((prev) => ({ ...prev, [id]: patch }));
+  }, []);
 
-  const value = useMemo(() => ({ orders, assign, reset }), [orders, assign, reset]);
+  const reset = useCallback(() => {
+    setAssignments({});
+    setPatches({});
+  }, []);
+
+  const value = useMemo(() => ({ orders, assign, applyStatus, reset }), [orders, assign, applyStatus, reset]);
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
 

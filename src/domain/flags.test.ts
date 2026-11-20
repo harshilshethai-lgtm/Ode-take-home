@@ -17,8 +17,8 @@ describe("Worklist flags", () => {
   });
 
   it("stacks derived and finding flags, most severe first", () => {
-    // Crusher: scan in 17h, 49h in Awaiting documents (SLA 24h), blank page.
-    expect(ids(12)).toEqual(["slot_at_risk", "missing_docs", "over_sla"]);
+    // Crusher: the office-visit page is blank, and the fax has no scan time.
+    expect(ids(12)).toEqual(["missing_docs"]);
   });
 
   it("privacy and coverage findings surface as their own flags", () => {

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
-import { BarChart3, Home, Moon, PanelLeftClose, PanelLeftOpen, Search, Settings, Sun, type LucideIcon } from "lucide-react";
+import { BarChart3, Home, Moon, PanelLeftClose, PanelLeftOpen, Search, Settings, Sun, TrendingUp, type LucideIcon } from "lucide-react";
 import { CommandPalette } from "@/components/CommandPalette";
 import { firstName } from "@/components/AssignMenu";
 import { Avatar } from "@/components/ui/avatar";
@@ -25,7 +25,8 @@ interface NavItem {
 
 const MAIN_NAV: NavItem[] = [
   { to: "/", label: "Worklist", icon: Home, alsoActiveFor: ["/case"] },
-  { to: "/analytics", label: "Analytics", icon: BarChart3 },
+  { to: "/impact", label: "Impact", icon: TrendingUp },
+  { to: "/analytics", label: "Operations", icon: BarChart3 },
 ];
 
 const FOOTER_NAV: NavItem[] = [{ to: "/settings", label: "Settings", icon: Settings }];
@@ -39,11 +40,12 @@ export default function AppShell() {
   }, [collapsed]);
 
   return (
-    <div className="flex h-full">
+    <div className="flex h-full flex-col sm:flex-row">
+      <MobileNav pathname={pathname} />
       <aside
         aria-label="Primary"
         className={cn(
-          "flex shrink-0 flex-col border-r border-line bg-sidebar",
+          "hidden shrink-0 flex-col border-r border-line bg-sidebar sm:flex",
           collapsed ? "w-12" : "w-56",
         )}
       >
@@ -73,6 +75,32 @@ export default function AppShell() {
         <Outlet />
       </div>
       <CommandPalette />
+    </div>
+  );
+}
+
+function MobileNav({ pathname }: { pathname: string }) {
+  const items = [...MAIN_NAV, ...FOOTER_NAV];
+  return (
+    <div className="flex h-12 items-center gap-4 overflow-x-auto border-b border-line px-4 sm:hidden">
+      <span className="shrink-0 text-emph text-fg">Halcyon</span>
+      {items.map((item) => {
+        const active = item.to === "/" ? pathname === "/" : pathname === item.to || pathname.startsWith(`${item.to}/`);
+        const extra = item.alsoActiveFor?.some((prefix) => pathname.startsWith(prefix)) ?? false;
+        return (
+          <NavLink
+            key={item.to}
+            to={item.to}
+            end={item.to === "/"}
+            className={cn(
+              "shrink-0 text-body",
+              active || extra ? "font-medium text-accent-fg" : "text-fg-2",
+            )}
+          >
+            {item.label}
+          </NavLink>
+        );
+      })}
     </div>
   );
 }

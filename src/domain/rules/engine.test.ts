@@ -3,43 +3,54 @@ import { buildSnapshot, evaluateOrder, evaluateSnapshot, rollupOverall, SUBMISSI
 import { condition, historyReviewed, study, symptomOnset, treatment } from "./factBuilders";
 import { resolvePolicyVersion, type Catalog } from "./resolve";
 import { deriveStatus, sharedClaims } from "./versionStatus";
-import type { Criterion, EvaluationInput, Payer, Policy, PolicyException, PolicyVersion } from "./types";
+import type { Criterion, EvaluationInput, Payer, Policy, PolicyException, PolicyVersion, Property } from "./types";
 
 /* ---------- a tiny catalog built only from data, to prove the engine has no payer-specific code ---------- */
 
 const payer: Payer = { id: "payer_a", name: "Acme Health", slug: "acme" };
 const policy: Policy = { id: "pol_a", payerId: "payer_a", externalPolicyId: "KNEE-1", title: "MRI knee", bodySite: "knee", createdAt: "2026-01-01" };
 
-function crit(key: string, label: string, type: string, params: Record<string, unknown>, sortOrder: number, section = `§${sortOrder + 1}`): Criterion {
+function crit(key: string, label: string, properties: Property[], sortOrder: number, ref = `(${sortOrder + 1})`): Criterion {
   return {
-    id: `c_${key}`, policyVersionId: "v1", key, displayLabel: label, type, params, evaluationMode: "auto",
-    sourceCitation: { section, excerpt: `Excerpt for ${key}` }, interpretationNote: null, isAssumption: false, sortOrder,
+    id: `c_${key}`, policyVersionId: "v1", key, ref, displayLabel: label, properties, evaluationMode: "auto", failureType: "fixable",
+    excerpt: `Excerpt for ${key}`, sortOrder,
   };
 }
 
+const p = (key: string, label: string, value: Property["value"], op?: NonNullable<Property["check"]>["op"], fact?: string, unit?: string): Property => ({
+  key, label, value, ...(unit ? { unit } : {}), ...(op ? { check: { op, fact: fact! } } : {}),
+});
+
 const criteria: Criterion[] = [
-  crit("symptom_duration", "1. Symptom duration", "min_duration", { factType: "symptom_onset", minWeeks: 4 }, 0),
-  crit("conservative_care", "2. Conservative care", "evidence_in_window", {
-    factType: "conservative_treatment", minWeeks: 4, lookbackMonths: 6,
-    allowedSourceTypes: ["pt_note", "clinic_note_treating_provider"],
-  }, 1),
-  crit("prior_xray", "3. X-ray", "required_prior_study", { studyType: "xray", bodySite: "knee", withinMonths: 6 }, 2),
-  crit("no_recent_mri", "4. No recent MRI", "no_prior_study_in_window", { studyType: "mri", bodySite: "knee", withinMonths: 12, sameLaterality: true }, 3),
+  crit("symptom_duration", "Symptom duration", [p("duration", "Duration", 4, "min_weeks", "symptom_onset", "weeks")], 0),
+  crit("conservative_care", "Conservative care", [
+    p("duration", "Duration", 4, "min_weeks", "conservative_treatment", "weeks"),
+    p("lookback", "Lookback", 6, "within_months", "conservative_treatment", "months"),
+    p("accepted", "Accepted", ["pt_note", "clinic_note_treating_provider"], "source_in", "conservative_treatment"),
+  ], 1),
+  crit("prior_xray", "X-ray", [p("study", "Imaging", "Knee X-ray", "present", "xray"), p("lookback", "Lookback", 6, "within_months", "xray", "months")], 2),
+  crit("no_recent_mri", "No recent MRI", [
+    p("prior", "Prior knee MRI", "None", "absent", "mri"),
+    p("lookback", "Lookback", 12, "within_months", "mri", "months"),
+    p("side", "Same knee", true, "same_side", "mri"),
+  ], 3),
 ];
 
 const exception: PolicyException = {
-  id: "e1", policyVersionId: "v1", key: "acute", displayLabel: "Acute structural", triggers: ["locked_knee"],
+  id: "e1", policyVersionId: "v1", key: "acute", ref: "Exceptions", displayLabel: "Acute structural", triggers: ["locked_knee"],
   waivesCriterionKeys: ["symptom_duration", "conservative_care"], evaluationMode: "human_review",
-  sourceCitation: { section: "Exceptions", excerpt: "x" }, interpretationNote: null, isAssumption: false,
+  excerpt: "x", assumption: null,
 };
+
+const plans = (planTypes: string[]): Property => ({ key: "plan_types", label: "Plans", value: planTypes });
 
 function version(over: Partial<PolicyVersion> = {}): PolicyVersion {
   return {
     id: "v1", policyId: "pol_a", versionNumber: 1, status: "published", effectiveFrom: "2026-01-01", effectiveTo: null,
     sourceRevisionLabel: null, sourceDocument: null, sourceDocumentHash: null,
-    applicability: { cptCodes: ["73721"], planTypes: ["commercial_hmo"], settings: "all" },
+    applicability: { cptCodes: ["73721"], settings: "all" },
     logic: "ALL",
-    submission: { channels: ["portal"], requiredAttachments: [], incompleteRequestHandling: "deny_resubmit_new" },
+    properties: [plans(["commercial_hmo"]), { key: "incomplete_requests", label: "Incomplete requests", value: "deny_resubmit_new" }],
     criteria, exceptions: [exception], changeNote: "init", createdBy: "u", lastEditedBy: "u", publishedBy: "u",
     publishedAt: "2026-01-01", createdAt: "2026-01-01", updatedAt: "2026-01-01", clonedFromVersionId: null, ...over,
   };
@@ -89,7 +100,7 @@ describe("policy version resolution", () => {
   });
 
   it("respects setting when given", () => {
-    const outpatientOnly = cat([version({ applicability: { cptCodes: ["73721"], planTypes: "all", settings: ["outpatient"] } })]);
+    const outpatientOnly = cat([version({ applicability: { cptCodes: ["73721"], settings: ["outpatient"] }, properties: [] })]);
     expect(resolvePolicyVersion(outpatientOnly, input({ setting: "inpatient" }))).toMatchObject({ found: false, reason: "setting_excluded" });
     expect(resolvePolicyVersion(outpatientOnly, input({ setting: "outpatient" })).found).toBe(true);
   });
@@ -130,12 +141,16 @@ describe("derived version status and conflicts", () => {
     expect(deriveStatus(version({ status: "archived" }), "2026-07-01")).toBe("archived");
   });
 
-  it("finds shared CPT + plan claims between two applicabilities", () => {
-    const a = { cptCodes: ["1", "2"], planTypes: "all" as const, settings: "all" as const };
-    expect(sharedClaims(a, { cptCodes: ["2", "3"], planTypes: ["x"], settings: "all" })).toEqual({ cptCodes: ["2"], planTypes: ["x"] });
-    expect(sharedClaims(a, { cptCodes: ["9"], planTypes: "all", settings: "all" })).toBeNull();
-    expect(sharedClaims({ ...a, planTypes: ["x"] }, { cptCodes: ["1"], planTypes: ["y"], settings: "all" })).toBeNull();
-    expect(sharedClaims({ ...a, settings: ["outpatient"] }, { cptCodes: ["1"], planTypes: "all", settings: ["inpatient"] })).toBeNull();
+  it("finds shared CPT + plan claims; plan types come from the policy properties", () => {
+    const scope = (cptCodes: string[], planTypes: string[] | null, settings: "all" | Array<"outpatient" | "inpatient"> = "all") => ({
+      applicability: { cptCodes, settings },
+      properties: planTypes ? [plans(planTypes)] : [],
+    });
+    const a = scope(["1", "2"], null);
+    expect(sharedClaims(a, scope(["2", "3"], ["x"]))).toEqual({ cptCodes: ["2"], planTypes: ["x"] });
+    expect(sharedClaims(a, scope(["9"], null))).toBeNull();
+    expect(sharedClaims(scope(["1"], ["x"]), scope(["1"], ["y"]))).toBeNull();
+    expect(sharedClaims(scope(["1"], null, ["outpatient"]), scope(["1"], null, ["inpatient"]))).toBeNull();
   });
 });
 
@@ -166,18 +181,19 @@ describe("engine", () => {
     expect(o.submissionBlocked).toBe(false);
   });
 
-  it("reasons are full sentences that cite payer, policy, version and section", () => {
+  it("reasons are full sentences that cite payer, policy, version and the insurer's reference", () => {
     const o = run([...goodFacts().filter((f) => f.type !== "conservative_treatment"), treatment({ modality: "physical_therapy", start: "2026-08-24", end: "2026-09-14", response: true })]);
     expect(status(o, "conservative_care").reason).toBe(
-      "Not met. 2. Conservative care (Acme Health KNEE-1, v1, §2): Found 3 weeks of physical therapy (PT note, 2026-09-14); policy requires at least 4 weeks within the past 6 months.",
+      "Not met. Conservative care (Acme Health KNEE-1, v1, (2)): Found 3 weeks of physical therapy (PT note, 2026-09-14); policy requires at least 4 weeks within the past 6 months.",
     );
     expect(o.overall).toBe("not_eligible");
   });
 
-  it("carries the verbatim citation and the rule text on every result", () => {
+  it("carries the reference, the verbatim excerpt, the rule text and one result per property", () => {
     const r = status(run(), "prior_xray");
-    expect(r.sourceCitation).toEqual({ section: "§3", excerpt: "Excerpt for prior_xray" });
-    expect(r.ruleText).toBe("X-ray of the knee within the past 6 months.");
+    expect(r).toMatchObject({ ref: "(3)", excerpt: "Excerpt for prior_xray" });
+    expect(r.ruleText).toBe("Imaging: Knee X-ray; Lookback: 6 months.");
+    expect(r.propertyResults?.map((x) => [x.key, x.status])).toEqual([["study", "met"], ["lookback", "met"]]);
   });
 
   it("missing evidence is never a pass: it is unknown, listed in the checklist, and blocks approval", () => {
@@ -185,7 +201,7 @@ describe("engine", () => {
     expect(status(o, "prior_xray").status).toBe("unknown");
     expect(o.overall).toBe("missing_info");
     expect(o.missingInfoChecklist.map((m) => m.criterionKey)).toEqual(["prior_xray"]);
-    expect(o.missingInfoChecklist[0].requirement).toBe("X-ray of the knee within the past 6 months.");
+    expect(o.missingInfoChecklist[0].requirement).toBe("Imaging: Knee X-ray; Lookback: 6 months.");
   });
 
   it("an empty fact list is missing_info, not approval", () => {
@@ -201,7 +217,9 @@ describe("engine", () => {
   });
 
   it("does not block when the payer allows amending, or when nothing is missing", () => {
-    const amendable = version({ submission: { channels: ["portal"], requiredAttachments: [], incompleteRequestHandling: "amendable" } });
+    const amendable = version({ properties: [plans(["commercial_hmo"]), { key: "incomplete_requests", label: "Incomplete requests", value: "amendable" }] });
+    const unstated = version({ properties: [plans(["commercial_hmo"])] });
+    expect(run(goodFacts().filter((f) => f.type !== "imaging_study"), {}, unstated).submissionBlocked).toBe(false);
     expect(run(goodFacts().filter((f) => f.type !== "imaging_study"), {}, amendable).submissionBlocked).toBe(false);
     expect(run().submissionBlocked).toBe(false);
   });
@@ -258,23 +276,28 @@ describe("engine", () => {
     expect(status(missing, "prior_xray").status).toBe("unknown");
   });
 
-  it("an unknown primitive type is flagged for review, never passed", () => {
-    const bad = version({ criteria: [...criteria, crit("mystery", "5. Mystery", "does_not_exist", {}, 4)] });
-    const o = run(goodFacts(), {}, bad);
-    expect(status(o, "mystery").status).toBe("needs_review");
+  it("a property without a check is flagged for review, never passed", () => {
+    const extra = version({ criteria: [...criteria, crit("judgment", "Severity", [p("note", "Severity", "Clinician judges")], 4)] });
+    const o = run(goodFacts(), {}, extra);
+    expect(status(o, "judgment").status).toBe("needs_review");
     expect(o.overall).toBe("needs_review");
+  });
+
+  it("imaging facts only count for the policy's body site", () => {
+    const o = run([...goodFacts().filter((f) => f.type !== "imaging_study"), study({ studyType: "xray", bodySite: "shoulder", date: "2026-10-01", laterality: "left" }), historyReviewed("2026-11-01")]);
+    expect(status(o, "prior_xray").status).toBe("unknown");
   });
 
   it("is deterministic and pinned to a snapshot that includes rule text", () => {
     const v = version();
     const snap = buildSnapshot(payer, policy, v);
-    expect(snap.criteria.map((c) => c.text)[0]).toBe("Symptoms present for at least 4 weeks.");
+    expect(snap.criteria.map((c) => c.text)[0]).toBe("Duration: 4 weeks.");
     const inp = input();
     const a = evaluateSnapshot(snap, inp);
     const b = evaluateSnapshot(snap, inp);
     expect(a).toEqual(b);
     // The snapshot is a copy: editing the source later does not change it.
-    v.criteria[0].params.minWeeks = 99;
-    expect(snap.criteria[0].params.minWeeks).toBe(4);
+    v.criteria[0].properties[0].value = 99;
+    expect(snap.criteria[0].properties[0].value).toBe(4);
   });
 });

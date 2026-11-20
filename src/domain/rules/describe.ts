@@ -1,15 +1,8 @@
-// Plain-English text for everything that is not a criterion (criteria use their primitive's describe()).
+// Plain-English text for rules: criteria are described by their properties, policies by theirs.
 
-import { capitalize, humanize, joinList } from "./common";
-import { getPrimitive } from "./primitives/registry";
-import type {
-  Applicability,
-  Channel,
-  Criterion,
-  IncompleteHandling,
-  PolicyException,
-  Submission,
-} from "./types";
+import { SOURCE_LABEL_PLURAL, capitalize, humanize, joinList } from "./common";
+import { POLICY_PROPERTY, planTypesOf } from "./policyProperties";
+import type { Applicability, Channel, IncompleteHandling, PolicyException, Property, SourceType } from "./types";
 
 const PLAN_LABEL: Record<string, string> = {
   commercial_hmo: "commercial HMO",
@@ -21,26 +14,6 @@ const PLAN_LABEL: Record<string, string> = {
 
 export function planTypeLabel(planType: string): string {
   return PLAN_LABEL[planType] ?? humanize(planType);
-}
-
-/** describe() for any criterion. Falls back gracefully if the primitive is unknown or params are invalid. */
-export function describeCriterion(c: Pick<Criterion, "type" | "params">): string {
-  const prim = getPrimitive(c.type);
-  if (!prim) return `Unknown rule type "${c.type}".`;
-  const parsed = prim.paramsSchema.safeParse(c.params);
-  if (!parsed.success) return `${prim.label}: parameters are incomplete.`;
-  return prim.describe(parsed.data);
-}
-
-export function describeTrigger(slug: string): string {
-  return humanize(slug);
-}
-
-export function describeApplicability(a: Applicability): string {
-  const cpt = `CPT ${a.cptCodes.join(", ") || "(none)"}`;
-  const plans = a.planTypes === "all" ? "All plans" : capitalize(joinList(a.planTypes.map(planTypeLabel), "or")) + " plans only";
-  const settings = a.settings === "all" ? "All settings" : joinList(a.settings.map(capitalize), "or");
-  return `${cpt} · ${plans} · ${settings}`;
 }
 
 const CHANNEL_ORDER: Channel[] = ["portal", "api", "fax"];
@@ -59,11 +32,42 @@ export const INCOMPLETE_LABEL: Record<IncompleteHandling, string> = {
   unspecified: "not specified by the payer",
 };
 
-export function describeSubmission(s: Submission): string {
-  const parts = [describeChannels(s.channels)];
-  if (s.requiredAttachments.length) parts.push(`Attach: ${s.requiredAttachments.join(", ")}`);
-  parts.push(`Incomplete requests: ${INCOMPLETE_LABEL[s.incompleteRequestHandling]}`);
-  return parts.join(" · ");
+/** "6 weeks", "PT notes or clinic notes from the treating provider", "Yes". */
+export function describeValue(p: Pick<Property, "key" | "value" | "unit" | "check">): string {
+  const { value } = p;
+  if (typeof value === "boolean") return value ? "Yes" : "No";
+  if (typeof value === "number") {
+    if (!p.unit) return String(value);
+    return `${value} ${value === 1 ? p.unit.replace(/s$/, "") : p.unit}`;
+  }
+  if (Array.isArray(value)) {
+    if (p.check?.op === "source_in" || p.check?.op === "source_not_in") {
+      return joinList(value.map((s) => SOURCE_LABEL_PLURAL[s as SourceType] ?? humanize(s)), p.check.op === "source_in" ? "or" : "and");
+    }
+    if (p.key === POLICY_PROPERTY.planTypes) return joinList(value.map(planTypeLabel), "or");
+    if (p.key === POLICY_PROPERTY.channels) return describeChannels(value as Channel[]);
+    return value.join(", ") || "(none)";
+  }
+  if (p.key === POLICY_PROPERTY.incompleteRequests) return INCOMPLETE_LABEL[value as IncompleteHandling] ?? value;
+  return value;
+}
+
+/** "Duration: 6 weeks; Lookback: 6 months." */
+export function describeCriterion(c: { properties: Property[] }): string {
+  if (c.properties.length === 0) return "No properties.";
+  return c.properties.map((p) => `${p.label}: ${describeValue(p)}`).join("; ") + ".";
+}
+
+export function describeTrigger(slug: string): string {
+  return humanize(slug);
+}
+
+export function describeApplicability(a: Applicability, v: { properties: Property[] }): string {
+  const cpt = `CPT ${a.cptCodes.join(", ") || "(none)"}`;
+  const planTypes = planTypesOf(v);
+  const plans = planTypes === "all" ? "All plans" : capitalize(joinList(planTypes.map(planTypeLabel), "or")) + " plans only";
+  const settings = a.settings === "all" ? "All settings" : joinList(a.settings.map(capitalize), "or");
+  return `${cpt} · ${plans} · ${settings}`;
 }
 
 /** "If any of [a, b], these criteria are waived: [labels]" */

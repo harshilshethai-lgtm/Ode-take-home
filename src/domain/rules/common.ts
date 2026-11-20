@@ -22,6 +22,14 @@ export function humanize(slug: string): string {
   return slug.replace(/_/g, " ");
 }
 
+/** "Symptoms materially changed" -> "symptoms_materially_changed". Empty in, empty out. */
+export function slugify(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "");
+}
+
 export function capitalize(s: string): string {
   return s.length ? s[0].toUpperCase() + s.slice(1) : s;
 }

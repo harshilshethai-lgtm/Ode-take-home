@@ -1,4 +1,4 @@
-// Seed: three payers, three policies, v1 of each, with the insurer's verbatim text as citations.
+// Seed: three payers, three policies (RAD-114 at v3, the others at v1), with the insurer's verbatim text as citations.
 // Source: fixtures/policies/insurer-policy-excerpts.pdf (pages 1-3). All names and numbers are fictional.
 
 import { ENGINE_VERSION, evaluateOrder } from "@/domain/rules/engine";
@@ -8,14 +8,17 @@ import type {
   Evaluation,
   EvaluationInput,
   EvaluationMode,
+  FailureType,
   Fact,
   Payer,
   Policy,
   PolicyException,
   PolicyVersion,
   PriorAuthRequirement,
+  Property,
   TestCase,
 } from "@/domain/rules/types";
+import { POLICY_PROPERTY } from "@/domain/rules/policyProperties";
 import { SCHEMA_VERSION, type RulesDb } from "./store";
 
 const PDF = "fixtures/policies/insurer-policy-excerpts.pdf";
@@ -40,13 +43,12 @@ export const POLICIES: Policy[] = [
 
 interface CritSpec {
   key: string;
+  /** The insurer's own reference, as printed. */
+  ref: string;
   label: string;
-  type: string;
-  params: Record<string, unknown>;
-  section: string;
   excerpt: string;
-  note?: string;
-  assumption?: boolean;
+  fail: FailureType;
+  properties: Property[];
   mode?: EvaluationMode;
 }
 
@@ -55,35 +57,31 @@ function criteria(versionId: string, specs: CritSpec[]): Criterion[] {
     id: `crit_${versionId}_${s.key}`,
     policyVersionId: versionId,
     key: s.key,
+    ref: s.ref,
     displayLabel: s.label,
-    type: s.type,
-    params: s.params,
+    properties: s.properties,
     evaluationMode: s.mode ?? "auto",
-    sourceCitation: { section: s.section, excerpt: s.excerpt },
-    interpretationNote: s.note ?? null,
-    isAssumption: s.assumption ?? false,
+    failureType: s.fail,
+    excerpt: s.excerpt,
     sortOrder: i,
   }));
 }
 
-function exception(
-  versionId: string,
-  e: Omit<PolicyException, "id" | "policyVersionId" | "interpretationNote" | "isAssumption"> & { note?: string; assumption?: boolean },
-): PolicyException {
-  const { note, assumption, ...rest } = e;
-  return { ...rest, id: `exc_${versionId}_${e.key}`, policyVersionId: versionId, interpretationNote: note ?? null, isAssumption: assumption ?? false };
+function exception(versionId: string, e: Omit<PolicyException, "id" | "policyVersionId" | "assumption"> & { assumption?: string }): PolicyException {
+  const { assumption, ...rest } = e;
+  return { ...rest, id: `exc_${versionId}_${e.key}`, policyVersionId: versionId, assumption: assumption ?? null };
 }
 
 function version(
   id: string,
   policyId: string,
-  v: Pick<PolicyVersion, "applicability" | "submission" | "criteria" | "exceptions" | "sourceRevisionLabel"> & { page: number },
+  v: Pick<PolicyVersion, "applicability" | "properties" | "criteria" | "exceptions" | "sourceRevisionLabel"> & { page: number; versionNumber?: number },
 ): PolicyVersion {
-  const { page, ...rest } = v;
+  const { page, versionNumber = 1, ...rest } = v;
   return {
     id,
     policyId,
-    versionNumber: 1,
+    versionNumber,
     status: "published",
     effectiveFrom: SEED_EFFECTIVE,
     effectiveTo: null,
@@ -102,81 +100,176 @@ function version(
   };
 }
 
+/* ------------------------------------------------------------------ Property builders */
+
+const duration = (fact: string, n: number): Property => ({ key: "duration", label: "Duration", value: n, unit: "weeks", check: { op: "min_weeks", fact } });
+const lookback = (fact: string, n: number): Property => ({ key: "lookback", label: "Lookback", value: n, unit: "months", check: { op: "within_months", fact } });
+const required = (fact: string, key: string, label: string, value: string): Property => ({ key, label, value, check: { op: "present", fact } });
+const none = (fact: string, label: string): Property => ({ key: "prior_study", label, value: "None", check: { op: "absent", fact } });
+const accepts = (sources: string[]): Property => ({ key: "accepted_sources", label: "Accepted documentation", value: sources, check: { op: "source_in", fact: "conservative_treatment" } });
+const list = (key: string, label: string, value: string[]): Property => ({ key, label, value });
+
 /* ------------------------------------------------------------------ Federation Health · RAD-114 */
 
-const V_RAD = "ver_rad114_1";
-const rad114 = version(V_RAD, "pol_rad114", {
-  page: 1,
-  sourceRevisionLabel: "Effective 01/01/2026",
-  applicability: { cptCodes: ["72148", "72149", "72158"], planTypes: "all", settings: ["outpatient"] },
-  submission: {
-    channels: ["api", "portal"],
-    requiredAttachments: ["most recent office note", "conservative-treatment documentation"],
-    incompleteRequestHandling: "unspecified",
+/**
+ * Three published versions, so the history view has something real to show:
+ *  v1  Jan 2025  no X-ray criterion; conservative care within 3 months
+ *  v2  Jul 2025  adds "X-rays first" (so "No MRI" moves from 2c to 2d)
+ *  v3  Jan 2026  conservative care lookback widened from 3 to 6 months (current)
+ */
+interface RadSpec {
+  number: 1 | 2 | 3;
+  effectiveFrom: string;
+  effectiveTo: string | null;
+  revision: string;
+  lookbackMonths: 3 | 6;
+  withXray: boolean;
+  changeNote: string;
+  publishedBy: string;
+  publishedAt: string;
+}
+
+const RAD_SPECS: RadSpec[] = [
+  {
+    number: 1,
+    effectiveFrom: "2025-01-01",
+    effectiveTo: "2025-06-30",
+    revision: "Effective 01/01/2025",
+    lookbackMonths: 3,
+    withXray: false,
+    changeNote: "Initial import of Federation Health RAD-114.",
+    publishedBy: "Priya Raman",
+    publishedAt: "2024-12-16T17:20:00.000Z",
   },
-  criteria: criteria(V_RAD, [
+  {
+    number: 2,
+    effectiveFrom: "2025-07-01",
+    effectiveTo: "2025-12-31",
+    revision: "Effective 07/01/2025",
+    lookbackMonths: 3,
+    withXray: true,
+    changeNote: "Insurer added plain X-rays as a criterion.",
+    publishedBy: "Marcus Lee",
+    publishedAt: "2025-06-18T16:05:00.000Z",
+  },
+  {
+    number: 3,
+    effectiveFrom: SEED_EFFECTIVE,
+    effectiveTo: null,
+    revision: "Effective 01/01/2026",
+    lookbackMonths: 6,
+    withXray: true,
+    changeNote: "Conservative care lookback widened from 3 to 6 months.",
+    publishedBy: "Priya Raman",
+    publishedAt: SEED_TS,
+  },
+];
+
+const radId = (n: number) => `ver_rad114_${n}`;
+
+function radVersion(spec: RadSpec): PolicyVersion {
+  const id = radId(spec.number);
+  const mo = spec.lookbackMonths;
+  // Without the X-ray criterion, "No MRI" was the third item.
+  const mriRef = spec.withXray ? "2d" : "2c";
+  const specs: CritSpec[] = [
     {
       key: "symptom_duration",
-      label: "2a. Symptom duration",
-      type: "min_duration",
-      params: { factType: "symptom_onset", minWeeks: 6 },
-      section: "§2a",
+      ref: "2a",
+      fail: "clinical",
+      label: "Symptoms ≥ 6 wks",
       excerpt: "a. Low back pain, with or without radicular symptoms, for 6 weeks or more;",
+      properties: [duration("symptom_onset", 6)],
     },
     {
       key: "conservative_care",
-      label: "2b. Conservative treatment",
-      type: "evidence_in_window",
-      params: {
-        factType: "conservative_treatment",
-        minWeeks: 6,
-        lookbackMonths: 6,
-        allowedSourceTypes: ["pt_note", "clinic_note_treating_provider", "pharmacy_record"],
-        allowedModalities: ["physical_therapy", "chiropractic", "prescription_medication"],
-        requireResponseDocumented: true,
-      },
-      section: "§2b",
-      excerpt:
-        "b. 6 weeks or more of conservative treatment in the past 6 months, such as physical therapy, chiropractic care or prescription medication, with documentation of the treatment and the response;",
+      ref: "2b",
+      fail: "fixable",
+      label: "Conservative care ≥ 6 wks",
+      excerpt: `b. 6 weeks or more of conservative treatment in the past ${mo} months, such as physical therapy, chiropractic care or prescription medication, with documentation of the treatment and the response;`,
+      properties: [
+        duration("conservative_treatment", 6),
+        lookback("conservative_treatment", mo),
+        required("treatment_response", "response", "Response documented", "Required"),
+      ],
     },
-    {
-      key: "prior_xray",
-      label: "2c. Plain X-rays",
-      type: "required_prior_study",
-      params: { studyType: "xray", bodySite: "lumbar_spine" },
-      section: "§2c",
-      excerpt: "c. Plain X-rays of the lumbar spine, unless a red-flag condition is present;",
-    },
+    ...(spec.withXray
+      ? [
+          {
+            key: "prior_xray",
+            ref: "2c",
+            fail: "fixable" as const,
+            label: "X-rays first",
+            excerpt: "c. Plain X-rays of the lumbar spine, unless a red-flag condition is present;",
+            properties: [required("xray", "study", "Imaging", "Plain X-ray of the lumbar spine")],
+          },
+        ]
+      : []),
     {
       key: "no_recent_mri",
-      label: "2d. No recent lumbar MRI",
-      type: "no_prior_study_in_window",
-      params: { studyType: "mri", bodySite: "lumbar_spine", withinMonths: 12, sameLaterality: false, overrideCondition: "symptoms_materially_changed" },
-      section: "§2d",
-      excerpt: "d. No lumbar MRI in the past 12 months, unless symptoms have materially changed.",
+      ref: mriRef,
+      fail: "clinical",
+      label: "No MRI in 12 mo",
+      excerpt: `${spec.withXray ? "d" : "c"}. No lumbar MRI in the past 12 months, unless symptoms have materially changed.`,
+      properties: [none("mri", "Prior lumbar MRI"), lookback("mri", 12)],
     },
-  ]),
-  exceptions: [
-    exception(V_RAD, {
-      key: "red_flags",
-      displayLabel: "3. Red-flag conditions",
-      triggers: [
-        "cauda_equina_symptoms",
-        "progressive_neurological_deficit",
-        "suspected_infection",
-        "suspected_malignancy_or_cancer_history",
-        "significant_trauma",
-      ],
-      waivesCriterionKeys: ["symptom_duration", "conservative_care", "prior_xray"],
-      evaluationMode: "human_review",
-      sourceCitation: {
-        section: "§3",
-        excerpt:
-          "3. Red-flag conditions waive 2a to 2c: cauda equina symptoms (bowel or bladder dysfunction, saddle anesthesia), progressive neurological deficit, suspected infection, suspected malignancy or history of cancer, significant trauma.",
-      },
-    }),
-  ],
-});
+  ];
+  const waives = spec.withXray ? ["symptom_duration", "conservative_care", "prior_xray"] : ["symptom_duration", "conservative_care"];
+  const v = version(id, "pol_rad114", {
+    page: 1,
+    versionNumber: spec.number,
+    sourceRevisionLabel: spec.revision,
+    applicability: { cptCodes: ["72148", "72149", "72158"], settings: ["outpatient"] },
+    properties: [
+      list(POLICY_PROPERTY.channels, "Submit via", ["api", "portal"]),
+      list(POLICY_PROPERTY.attachments, "Attach", ["Most recent office note", "Documentation of conservative treatment"]),
+    ],
+    criteria: criteria(id, specs),
+    exceptions: [
+      exception(id, {
+        key: "red_flags",
+        ref: "3",
+        displayLabel: "Red flags",
+        triggers: [
+          "cauda_equina_symptoms",
+          "progressive_neurological_deficit",
+          "suspected_infection",
+          "suspected_malignancy_or_cancer_history",
+          "significant_trauma",
+        ],
+        waivesCriterionKeys: waives,
+        evaluationMode: "human_review",
+        excerpt: `3. Red-flag conditions waive ${spec.withXray ? "2a to 2c" : "2a and 2b"}: cauda equina symptoms (bowel or bladder dysfunction, saddle anesthesia), progressive neurological deficit, suspected infection, suspected malignancy or history of cancer, significant trauma.`,
+      }),
+      exception(id, {
+        key: "symptoms_changed",
+        ref: mriRef,
+        displayLabel: "Symptoms changed",
+        triggers: ["symptoms_materially_changed"],
+        waivesCriterionKeys: ["no_recent_mri"],
+        evaluationMode: "human_review",
+        excerpt: "unless symptoms have materially changed.",
+      }),
+    ],
+  });
+  return {
+    ...v,
+    effectiveFrom: spec.effectiveFrom,
+    effectiveTo: spec.effectiveTo,
+    changeNote: spec.changeNote,
+    createdBy: spec.publishedBy,
+    lastEditedBy: spec.publishedBy,
+    publishedBy: spec.publishedBy,
+    publishedAt: spec.publishedAt,
+    createdAt: spec.publishedAt,
+    updatedAt: spec.publishedAt,
+    clonedFromVersionId: spec.number > 1 ? radId(spec.number - 1) : null,
+    // Only the current revision of the insurer's PDF is in the fixtures.
+    ...(spec.number < 3 ? { sourceDocument: null, sourceDocumentHash: null } : {}),
+  };
+}
+
+const radVersions = RAD_SPECS.map(radVersion);
 
 /* ------------------------------------------------------------------ Ferengi Benefit Group · MSK-207 */
 
@@ -184,62 +277,67 @@ const V_MSK = "ver_msk207_1";
 const msk207 = version(V_MSK, "pol_msk207", {
   page: 2,
   sourceRevisionLabel: "Rev. 3",
-  applicability: { cptCodes: ["73721", "73722", "73723"], planTypes: ["commercial_hmo"], settings: "all" },
-  submission: { channels: ["portal"], requiredAttachments: [], incompleteRequestHandling: "deny_resubmit_new" },
+  applicability: { cptCodes: ["73721", "73722", "73723"], settings: "all" },
+  properties: [
+    list(POLICY_PROPERTY.planTypes, "Plans", ["commercial_hmo"]),
+    {
+      key: "joint",
+      label: "Joint",
+      value: "Knee",
+      assumption: "CPT 73721 to 73723 cover every lower-extremity joint, but the criteria are written for the knee only.",
+    },
+    list(POLICY_PROPERTY.channels, "Submit via", ["portal"]),
+    { key: POLICY_PROPERTY.incompleteRequests, label: "Incomplete requests", value: "deny_resubmit_new" },
+  ],
   criteria: criteria(V_MSK, [
     {
       key: "symptom_duration",
-      label: "1. Symptom duration",
-      type: "min_duration",
-      params: { factType: "symptom_onset", minWeeks: 4 },
-      section: "Criteria (1)",
+      ref: "(1)",
+      fail: "clinical",
+      label: "Knee pain ≥ 4 wks",
       excerpt: "(1) knee pain for at least 4 weeks;",
-      assumption: true,
-      note: "CPT codes cover all lower-extremity joints but criteria are written for the knee only. Hip/ankle MRI requests are flagged as a coverage gap.",
+      properties: [duration("symptom_onset", 4)],
     },
     {
       key: "conservative_care",
-      label: "2. Conservative treatment",
-      type: "evidence_in_window",
-      params: {
-        factType: "conservative_treatment",
-        minWeeks: 4,
-        allowedSourceTypes: ["pt_note", "clinic_note_treating_provider"],
-        requireResponseDocumented: false,
-      },
-      section: "Criteria (2)",
+      ref: "(2)",
+      fail: "fixable",
+      label: "Conservative care ≥ 4 wks",
       excerpt:
         "(2) at least 4 weeks of conservative treatment, documented in physical therapy notes or clinic notes from the treating provider. A patient's own report of treatment is not sufficient documentation.",
+      properties: [
+        duration("conservative_treatment", 4),
+        accepts(["pt_note", "clinic_note_treating_provider"]),
+        { key: "excluded_sources", label: "Not accepted", value: ["patient_reported"], check: { op: "source_not_in", fact: "conservative_treatment" } },
+      ],
     },
     {
       key: "prior_xray",
-      label: "3. Knee X-ray",
-      type: "required_prior_study",
-      params: { studyType: "xray", bodySite: "knee", withinMonths: 6 },
-      section: "Criteria (3)",
+      ref: "(3)",
+      fail: "fixable",
+      label: "Knee X-ray within 6 mo",
       excerpt: "(3) Knee X-rays within the past 6 months; and",
+      properties: [required("xray", "study", "Imaging", "Knee X-ray"), lookback("xray", 6)],
     },
     {
       key: "no_recent_mri",
-      label: "4. No recent knee MRI",
-      type: "no_prior_study_in_window",
-      params: { studyType: "mri", bodySite: "knee", withinMonths: 12, sameLaterality: true },
-      section: "Criteria (4)",
+      ref: "(4)",
+      fail: "clinical",
+      label: "No MRI of same knee in 12 mo",
       excerpt: "(4) no knee MRI of the same knee in the past 12 months.",
+      properties: [none("mri", "Prior knee MRI"), lookback("mri", 12), { key: "same_side", label: "Same knee", value: true, check: { op: "same_side", fact: "mri" } }],
     },
   ]),
   exceptions: [
     exception(V_MSK, {
       key: "acute_structural",
-      displayLabel: "Exceptions",
+      ref: "Exceptions",
+      displayLabel: "Acute findings",
       triggers: ["suspected_ligament_rupture_with_instability", "locked_knee_unable_to_extend", "suspected_fracture_not_seen_on_xray"],
       waivesCriterionKeys: ["symptom_duration", "conservative_care"],
       evaluationMode: "human_review",
-      sourceCitation: {
-        section: "Exceptions",
-        excerpt:
-          "Criteria (1) and (2) do not apply to suspected ligament rupture with instability, locked knee unable to extend, or suspected fracture not seen on X-ray.",
-      },
+      excerpt:
+        "Criteria (1) and (2) do not apply to suspected ligament rupture with instability, locked knee unable to extend, or suspected fracture not seen on X-ray.",
     }),
   ],
 });
@@ -250,63 +348,63 @@ const V_IMG = "ver_img330_1";
 const img330 = version(V_IMG, "pol_img330", {
   page: 3,
   sourceRevisionLabel: null,
-  applicability: { cptCodes: ["73221", "73222", "73223"], planTypes: "all", settings: "all" },
-  submission: { channels: ["portal"], requiredAttachments: [], incompleteRequestHandling: "unspecified" },
+  applicability: { cptCodes: ["73221", "73222", "73223"], settings: "all" },
+  properties: [list(POLICY_PROPERTY.channels, "Submit via", ["portal"])],
   criteria: criteria(V_IMG, [
     {
       key: "symptom_duration",
-      label: "Duration of symptoms",
-      type: "min_duration",
-      params: { factType: "symptom_onset", minWeeks: 6 },
-      section: "Duration of symptoms",
+      ref: "Duration of symptoms",
+      fail: "clinical",
+      label: "Symptoms ≥ 6 wks",
       excerpt: "Duration of symptoms | 6 weeks or more",
+      properties: [duration("symptom_onset", 6)],
     },
     {
       key: "conservative_care",
-      label: "Conservative care",
-      type: "evidence_in_window",
-      params: {
-        factType: "conservative_treatment",
-        minWeeks: 6,
-        allowedSourceTypes: ["pt_note", "injection_record", "clinic_note_treating_provider"],
-        requireResponseDocumented: false,
-      },
-      section: "Conservative care",
+      ref: "Conservative care",
+      fail: "fixable",
+      label: "Conservative care ≥ 6 wks",
       excerpt: "Conservative care | 6 weeks or more, documented (PT notes, injection record or clinic notes)",
+      properties: [duration("conservative_treatment", 6), accepts(["pt_note", "injection_record", "clinic_note_treating_provider"])],
     },
     {
       key: "prior_xray",
-      label: "Imaging first",
-      type: "required_prior_study",
-      params: { studyType: "xray", bodySite: "shoulder" },
-      section: "Imaging first",
+      ref: "Imaging first",
+      fail: "fixable",
+      label: "Shoulder X-ray",
       excerpt: "Imaging first | Shoulder X-ray required",
+      properties: [required("xray", "study", "Imaging", "Shoulder X-ray")],
     },
     {
       key: "no_recent_mri",
-      label: "Repeat imaging",
-      type: "no_prior_study_in_window",
-      params: { studyType: "mri", bodySite: "shoulder", withinMonths: 12, sameLaterality: false },
-      section: "Repeat imaging",
+      ref: "Repeat imaging",
+      fail: "clinical",
+      label: "No MRI in 12 mo",
       excerpt: "Repeat imaging | Not within 12 months",
-      assumption: true,
-      note: "Policy does not specify laterality.",
+      properties: [
+        { ...none("mri", "Prior shoulder MRI"), assumption: "The table says \"repeat imaging\"; read as a repeat shoulder MRI." },
+        lookback("mri", 12),
+        {
+          key: "same_side",
+          label: "Same shoulder only",
+          value: false,
+          check: { op: "same_side", fact: "mri" },
+          assumption: "The policy does not say which shoulder, so an MRI of either one counts.",
+        },
+      ],
     },
   ]),
   exceptions: [
     exception(V_IMG, {
       key: "red_flags",
-      displayLabel: "Waived when",
+      ref: "Waived when",
+      displayLabel: "Red flags",
       triggers: ["trauma_with_weakness", "suspected_full_thickness_rotator_cuff_tear", "dislocation", "suspected_infection", "history_of_cancer"],
       waivesCriterionKeys: ["symptom_duration", "conservative_care", "prior_xray"],
       evaluationMode: "human_review",
-      sourceCitation: {
-        section: "Waived when",
-        excerpt:
-          "Waived when | Trauma with weakness, suspected full-thickness rotator cuff tear, dislocation, suspected infection, history of cancer",
-      },
-      assumption: true,
-      note: "Policy says 'Waived when' without listing which requirements are waived. Assumed to match the other payers; repeat-imaging rule not waived. Confirm with payer.",
+      excerpt:
+        "Waived when | Trauma with weakness, suspected full-thickness rotator cuff tear, dislocation, suspected infection, history of cancer",
+      assumption: "The table does not say which rows are waived. Assumed duration, conservative care and X-ray; repeat imaging is not waived.",
     }),
   ],
 });
@@ -500,7 +598,7 @@ const PRIOR_AUTH_REQUIREMENTS: PriorAuthRequirement[] = [
 /* ------------------------------------------------------------------ Build */
 
 export function buildSeedDb(): RulesDb {
-  const versions = [rad114, msk207, img330];
+  const versions = [...radVersions, msk207, img330];
   const db: RulesDb = {
     schemaVersion: SCHEMA_VERSION,
     seq: 1000,
@@ -511,13 +609,13 @@ export function buildSeedDb(): RulesDb {
     evaluations: [],
     auditLog: versions.map((v, i) => ({
       id: `audit_seed_${i + 1}`,
-      actor: SEED_AUTHOR,
+      actor: v.publishedBy ?? SEED_AUTHOR,
       action: "published" as const,
       entityType: "policy_version" as const,
       entityId: v.id,
       before: null,
-      after: { versionNumber: 1, effectiveFrom: SEED_EFFECTIVE, changeNote: v.changeNote },
-      timestamp: SEED_TS,
+      after: { versionNumber: v.versionNumber, effectiveFrom: v.effectiveFrom, changeNote: v.changeNote },
+      timestamp: v.publishedAt ?? SEED_TS,
     })),
     priorAuthRequirements: PRIOR_AUTH_REQUIREMENTS,
     observedSourceHashes: { [PDF]: SEED_PDF_HASH },

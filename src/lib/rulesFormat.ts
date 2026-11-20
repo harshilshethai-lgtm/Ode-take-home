@@ -1,3 +1,4 @@
+import { SEED_ORDERS } from "@/data/orders";
 export function fmtDate(iso: string | null | undefined): string {
   return iso ? iso.slice(0, 10) : "";
 }
@@ -8,4 +9,11 @@ export function fmtDateTime(iso: string): string {
 export function effectiveRange(v: { effectiveFrom: string | null; effectiveTo: string | null }): string {
   if (!v.effectiveFrom) return "no effective date yet";
   return `${v.effectiveFrom} → ${v.effectiveTo ?? "open-ended"}`;
+}
+
+/** Route to the case for an order number such as "ORD-58301", or null when no such order is on the worklist. */
+export function caseHref(orderNumber: string, doc?: string): string | null {
+  const order = SEED_ORDERS.find((o) => o.orderNumber === orderNumber);
+  if (!order) return null;
+  return `/case/${order.id}${doc ? `?doc=${encodeURIComponent(doc)}` : ""}`;
 }

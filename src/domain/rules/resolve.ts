@@ -30,13 +30,13 @@ export function resolvePolicyVersion(cat: Catalog, q: Query): ResolveResult {
     return { found: false, reason: "no_policy_for_cpt", message: `No ${payerName} policy covers CPT ${q.cptCode}.` };
   }
 
-  const byPlan = byCpt.filter((v) => planMatches(v.applicability, q.planType));
+  const byPlan = byCpt.filter((v) => planMatches(v, q.planType));
   if (byPlan.length === 0) {
     const v = byCpt[0];
     return {
       found: false,
       reason: "plan_type_excluded",
-      message: `${payerName} ${policyOf(v).externalPolicyId} covers CPT ${q.cptCode} but excludes plan type "${planTypeLabel(q.planType)}" (${describeApplicability(v.applicability)}).`,
+      message: `${payerName} ${policyOf(v).externalPolicyId} covers CPT ${q.cptCode} but excludes plan type "${planTypeLabel(q.planType)}" (${describeApplicability(v.applicability, v)}).`,
     };
   }
 

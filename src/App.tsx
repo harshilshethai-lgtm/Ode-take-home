@@ -1,13 +1,10 @@
-import { Route, Routes } from "react-router-dom";
+import { Navigate, Route, Routes } from "react-router-dom";
 import AppShell from "@/components/AppShell";
-import Analytics from "@/pages/Analytics";
-import CaseStub from "@/pages/CaseStub";
+import Operations from "@/pages/Operations";
+import Impact from "@/pages/Impact";
+import CaseView from "@/pages/CaseView";
 import Settings from "@/pages/Settings";
-import Compare from "@/pages/rules/Compare";
-import DraftEditor from "@/pages/rules/DraftEditor";
 import EvaluationTrace from "@/pages/rules/EvaluationTrace";
-import PolicyDetail from "@/pages/rules/PolicyDetail";
-import RulesList from "@/pages/rules/RulesList";
 import Worklist from "@/pages/Worklist";
 
 export default function App() {
@@ -15,14 +12,11 @@ export default function App() {
     <Routes>
       <Route element={<AppShell />}>
         <Route path="/" element={<Worklist />} />
-        <Route path="/case/:id" element={<CaseStub />} />
-        <Route path="/analytics" element={<Analytics />} />
+        <Route path="/case/:id" element={<CaseView />} />
+        <Route path="/analytics" element={<Operations />} />
+        <Route path="/impact" element={<Impact />} />
         <Route path="/settings" element={<Settings />} />
-        <Route path="/settings/rules" element={<RulesList />} />
-        <Route path="/settings/rules/:policyId" element={<PolicyDetail />} />
-        <Route path="/settings/rules/:policyId/versions/:versionId" element={<PolicyDetail />} />
-        <Route path="/settings/rules/:policyId/versions/:versionId/edit" element={<DraftEditor />} />
-        <Route path="/settings/rules/:policyId/compare" element={<Compare />} />
+        <Route path="/settings/rules/*" element={<Navigate to="/settings" replace />} />
         <Route path="/evaluations/:id" element={<EvaluationTrace />} />
       </Route>
     </Routes>

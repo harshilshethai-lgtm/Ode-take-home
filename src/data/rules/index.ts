@@ -1,7 +1,8 @@
 // App-wide instance: localStorage-backed store seeded with the three starter policies, on the prototype's demo clock.
 
-import { DEMO_NOW } from "@/data/orders";
+import { DEMO_NOW, SEED_ORDERS } from "@/data/orders";
 import type { RulesUser } from "@/domain/rules/types";
+import { recordOrderEvaluations } from "./orderEvaluations";
 import { buildSeedDb } from "./seed";
 import { createRulesApi } from "./service";
 import { RulesStore } from "./store";
@@ -15,6 +16,8 @@ const demoNow = () => new Date(DEMO_NOW.getTime() + (Date.now() - loadedAt)).toI
 
 export const rulesStore = new RulesStore(typeof localStorage === "undefined" ? null : localStorage, buildSeedDb);
 export const rulesApi = createRulesApi(rulesStore, { today: demoToday, now: demoNow });
+
+recordOrderEvaluations(rulesApi, SEED_ORDERS);
 
 /** Stand-ins until real auth exists. Two roles: editors edit drafts; approvers can also publish under the two-person rule. */
 export const RULES_USERS: RulesUser[] = [

@@ -39,6 +39,12 @@
 
   --container-page: 1200px;
   --container-wide: 1440px;
+  --container-impact: 1100px;
+
+  /* Headline figure on the pilot impact page. Larger than the page title so the number is the answer. */
+  --text-metric: 28px;
+  --text-metric--line-height: 32px;
+  --text-metric--font-weight: 600;
 
   --default-transition-duration: 140ms;
   --default-transition-timing-function: ease-out;
@@ -60,6 +66,41 @@
   --accent-fg: var(--color-indigo-600);
   --on-accent: #ffffff;
   --scrim: rgb(0 0 0 / 0.2);
+  --status-system: var(--color-blue-700);
+  --status-system-bg: color-mix(in oklab, var(--color-blue-500) 14%, white);
+  --status-coordinator: var(--color-orange-700);
+  --status-coordinator-bg: color-mix(in oklab, var(--color-orange-500) 16%, white);
+  --status-nurse: var(--color-teal-700);
+  --status-nurse-bg: color-mix(in oklab, var(--color-teal-500) 14%, white);
+  --status-approved: var(--color-green-700);
+  --status-approved-bg: color-mix(in oklab, var(--color-green-500) 14%, white);
+  --status-denied: var(--color-red-700);
+  --status-denied-bg: color-mix(in oklab, var(--color-red-500) 12%, white);
+
+  /* Pilot impact charts. One accent, faded for fills and secondary lines. */
+  --good: var(--color-green-600);
+  --bad: var(--color-red-600);
+  --warning: var(--color-amber-700);
+  --result-success: var(--color-green-700);
+  --result-success-bg: color-mix(in oklab, var(--color-green-500) 14%, white);
+  --result-danger: var(--color-red-700);
+  --result-danger-bg: color-mix(in oklab, var(--color-red-500) 12%, white);
+  --result-warning: var(--color-amber-700);
+  --result-warning-bg: color-mix(in oklab, var(--color-amber-500) 16%, white);
+  --chart-fill: color-mix(in oklab, var(--accent) 10%, transparent);
+  --chart-faint: color-mix(in oklab, var(--accent) 42%, var(--panel));
+  --phase-shadow: color-mix(in oklab, var(--color-zinc-500) 9%, transparent);
+  --phase-assisted: color-mix(in oklab, var(--color-zinc-500) 3%, transparent);
+  --phase-expand: color-mix(in oklab, var(--color-zinc-500) 7%, transparent);
+  --lever-1: color-mix(in oklab, var(--accent) 52%, var(--panel));
+  --lever-2: color-mix(in oklab, var(--accent) 38%, var(--panel));
+  --lever-3: color-mix(in oklab, var(--accent) 26%, var(--panel));
+  --lever-4: color-mix(in oklab, var(--accent) 16%, var(--panel));
+  --lever-5: color-mix(in oklab, var(--accent) 10%, var(--panel));
+  /* Age bars on Operations. One accent, three strengths. Darkest is over 24 business hours. */
+  --age-1: color-mix(in oklab, var(--accent) 28%, var(--panel));
+  --age-2: color-mix(in oklab, var(--accent) 55%, var(--panel));
+  --age-3: color-mix(in oklab, var(--accent) 88%, var(--panel));
 }
 
 .dark {
@@ -77,6 +118,28 @@
   --accent: var(--color-indigo-600);
   --accent-fg: var(--color-indigo-400);
   --scrim: rgb(0 0 0 / 0.5);
+  --status-system: var(--color-blue-300);
+  --status-system-bg: color-mix(in oklab, var(--color-blue-500) 22%, black);
+  --status-coordinator: var(--color-orange-300);
+  --status-coordinator-bg: color-mix(in oklab, var(--color-orange-500) 22%, black);
+  --status-nurse: var(--color-teal-300);
+  --status-nurse-bg: color-mix(in oklab, var(--color-teal-500) 22%, black);
+  --status-approved: var(--color-green-300);
+  --status-approved-bg: color-mix(in oklab, var(--color-green-500) 22%, black);
+  --status-denied: var(--color-red-300);
+  --status-denied-bg: color-mix(in oklab, var(--color-red-500) 22%, black);
+  --good: var(--color-green-400);
+  --bad: var(--color-red-400);
+  --age-1: color-mix(in oklab, var(--accent) 28%, var(--panel));
+  --age-2: color-mix(in oklab, var(--accent) 55%, var(--panel));
+  --age-3: color-mix(in oklab, var(--accent) 88%, var(--panel));
+  --warning: var(--color-amber-300);
+  --result-success: var(--color-green-300);
+  --result-success-bg: color-mix(in oklab, var(--color-green-500) 22%, black);
+  --result-danger: var(--color-red-300);
+  --result-danger-bg: color-mix(in oklab, var(--color-red-500) 22%, black);
+  --result-warning: var(--color-amber-300);
+  --result-warning-bg: color-mix(in oklab, var(--color-amber-500) 22%, black);
 }
 
 @theme inline {
@@ -95,6 +158,25 @@
   --color-accent-fg: var(--accent-fg);
   --color-on-accent: var(--on-accent);
   --color-scrim: var(--scrim);
+  --color-status-system: var(--status-system);
+  --color-status-system-bg: var(--status-system-bg);
+  --color-status-coordinator: var(--status-coordinator);
+  --color-status-coordinator-bg: var(--status-coordinator-bg);
+  --color-status-nurse: var(--status-nurse);
+  --color-status-nurse-bg: var(--status-nurse-bg);
+  --color-status-approved: var(--status-approved);
+  --color-status-approved-bg: var(--status-approved-bg);
+  --color-status-denied: var(--status-denied);
+  --color-status-denied-bg: var(--status-denied-bg);
+  --color-good: var(--good);
+  --color-bad: var(--bad);
+  --color-warning: var(--warning);
+  --color-result-success: var(--result-success);
+  --color-result-success-bg: var(--result-success-bg);
+  --color-result-danger: var(--result-danger);
+  --color-result-danger-bg: var(--result-danger-bg);
+  --color-result-warning: var(--result-warning);
+  --color-result-warning-bg: var(--result-warning-bg);
 }
 
 html,
@@ -153,6 +235,13 @@ body {
 @utility grid-cols-rule {
   grid-template-columns: 2rem 12rem 10rem;
 }
+@utility grid-cols-queue {
+  grid-template-columns: 9rem 2.5rem minmax(0, 1fr) 3.5rem 6.5rem;
+}
+/* Review rows: result, label, value, page chip. Values stay in their column. */
+@utility grid-cols-review {
+  grid-template-columns: 150px minmax(0, 1fr) minmax(0, 1fr) 44px;
+}
 
 /* Icons: Lucide only, stroke 1.5 everywhere. */
 svg.lucide {
@@ -167,12 +256,79 @@ svg.lucide {
 @utility animate-collapsible {
   animation: collapsible-down 140ms ease-out;
 }
+@utility animate-sheet {
+  animation: sheet-in 140ms ease-out;
+}
+@keyframes sheet-in {
+  from {
+    opacity: 0;
+    transform: translateX(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
 @keyframes collapsible-down {
   from {
     opacity: 0;
   }
   to {
     opacity: 1;
+  }
+}
+
+/* pdf.js text layer. Spans stay transparent so the canvas shows through. */
+.textLayer {
+  position: absolute;
+  inset: 0;
+  overflow: clip;
+  line-height: 1;
+  opacity: 1;
+  z-index: 1;
+  transform-origin: 0 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.textLayer span,
+.textLayer br {
+  position: absolute;
+  color: transparent;
+  white-space: pre;
+  transform-origin: 0 0;
+}
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1;
+  --font-height: 0;
+  font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1;
+  --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.textLayer .markedContent {
+  display: contents;
+}
+/* Box around the quoted field. Outline sits outside the glyph rect so it does not cover the type.
+   Amber on the white page, so it reads in both themes. */
+.cite-box {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  outline: 2px solid rgb(161 98 7);
+  background: rgb(250 204 21 / 0.45);
+}
+.cite-box.pulse {
+  animation: cite-box-in 500ms ease-out;
+}
+@keyframes cite-box-in {
+  from {
+    outline: 6px solid rgb(250 204 21 / 0.95);
+  }
+  to {
+    outline: 2px solid rgb(161 98 7);
   }
 }
 
