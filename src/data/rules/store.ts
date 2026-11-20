@@ -11,9 +11,10 @@ import type {
   PriorAuthRequirement,
   TestCase,
 } from "@/domain/rules/types";
+import { migrateV3toV4 } from "./migrateV4";
 
 /** Bump when the shape of RulesDb changes and add a step to MIGRATIONS. */
-export const SCHEMA_VERSION = 1;
+export const SCHEMA_VERSION = 4;
 const STORAGE_KEY = "halcyon.rules.db";
 
 export interface RulesConfig {
@@ -36,9 +37,47 @@ export interface RulesDb {
   config: RulesConfig;
 }
 
-type Migration = (db: Record<string, unknown>) => Record<string, unknown>;
+/** Return null to discard the document and re-seed (only when nothing in it was authored by a person). */
+type Migration = (db: Record<string, unknown>) => Record<string, unknown> | null;
+/** True when nothing in the document was authored by a person, i.e. it is only an older copy of the seed. */
+// Evaluations recorded from the seed orders at startup (origin "recorded") are re-created, so they do not count.
+const isUntouchedSeed = (doc: Record<string, unknown>) => {
+  const authored = (doc.evaluations as Array<{ id: string; origin?: string }>).filter((e) => !e.id.startsWith("eval_seed_") && e.origin !== "recorded");
+  const recorded = new Set((doc.evaluations as Array<{ id: string; origin?: string }>).filter((e) => e.origin === "recorded").map((e) => e.id));
+  return (
+    (doc.versions as Array<{ createdBy?: string }>).every(
+      (v) => v.createdBy === "Seed import" || v.createdBy === "Priya Raman" || v.createdBy === "Marcus Lee",
+    ) &&
+    (doc.auditLog as Array<{ action: string; entityId: string }>).every(
+      (a) => a.action === "published" || (a.action === "evaluated" && recorded.has(a.entityId)),
+    ) &&
+    authored.length === 0
+  );
+};
+
 /** MIGRATIONS[n] upgrades a schemaVersion n document to n + 1. */
-const MIGRATIONS: Record<number, Migration> = {};
+const MIGRATIONS: Record<number, Migration> = {
+  // v1 -> v2: every criterion gets a failureType. Duration and repeat-imaging rules are about the patient;
+  // the rest are about paperwork, which was the convention in the v1 seed.
+  // The seed content changed too (RAD-114 is v3, labels are short), so an untouched seed is replaced.
+  1: (doc) => {
+    if (isUntouchedSeed(doc)) return null;
+    const versions = (doc.versions as Array<Record<string, unknown>>).map((v) => ({
+      ...v,
+      criteria: (v.criteria as Array<Record<string, unknown>>).map((c) => ({
+        ...c,
+        failureType: c.failureType ?? (c.type === "min_duration" || c.type === "no_prior_study_in_window" ? "clinical" : "fixable"),
+      })),
+    }));
+    return { ...doc, versions };
+  },
+  // v2 -> v3: the seed gained RAD-114 v1 and v2 (version history). The shape did not change, so only an
+  // untouched seed is replaced; anything people edited is kept as it is.
+  2: (doc) => (isUntouchedSeed(doc) ? null : doc),
+  // v3 -> v4: criteria are insurer-stated properties with refs, and plan types / submission move to version
+  // properties. The seed was rewritten from the insurer's text, so an untouched seed is replaced.
+  3: (doc) => (isUntouchedSeed(doc) ? null : migrateV3toV4(doc)),
+};
 
 export function migrate(raw: unknown): RulesDb | null {
   if (!raw || typeof raw !== "object") return null;
@@ -48,7 +87,9 @@ export function migrate(raw: unknown): RulesDb | null {
   while (v < SCHEMA_VERSION) {
     const step = MIGRATIONS[v];
     if (!step) return null;
-    doc = { ...step(doc), schemaVersion: v + 1 };
+    const next = step(doc);
+    if (!next) return null;
+    doc = { ...next, schemaVersion: v + 1 };
     v += 1;
   }
   return doc as unknown as RulesDb;

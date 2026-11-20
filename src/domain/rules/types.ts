@@ -1,8 +1,6 @@
 // Prior-auth rule management: data model.
 // Rules are data. Nothing in the engine knows about a specific payer; differences live in PolicyVersion config.
 
-import type { ZodType } from "zod";
-
 /* ----------------------------- Facts (engine input) ----------------------------- */
 
 export const SOURCE_TYPES = [
@@ -51,7 +49,13 @@ export type EvaluationOverall = OverallStatus | "no_policy_found";
 
 export type EvaluationMode = "auto" | "human_review";
 
-/* ----------------------------- Primitive contract ----------------------------- */
+/**
+ * Why a criterion can fail. clinical: the patient does not meet it, so paperwork cannot fix it.
+ * fixable: documentation or a test is missing and can be obtained.
+ */
+export type FailureType = "clinical" | "fixable";
+
+/* ----------------------------- Properties ----------------------------- */
 
 export interface EvaluationContext {
   /** ISO date the service is (or will be) performed. All windows are measured back from here. */
@@ -59,27 +63,37 @@ export interface EvaluationContext {
   laterality?: Laterality;
   cptCode: string;
   planType: string;
+  /** The policy's body site. Imaging facts only count when they are of this site. */
+  bodySite: string;
 }
 
-/** What a primitive returns: a status, a plain-English sentence, and the facts behind it. */
-export interface PrimitiveResult {
-  status: Exclude<CriterionStatus, "waived">;
-  detail: string;
-  evidenceRefs: FactRef[];
+/**
+ * What the engine can verify against facts. Filters narrow the facts a criterion looks at
+ * (within_months, source_in, source_not_in, same_side); measures decide the result (min_weeks, present, absent).
+ */
+export const CHECK_OPS = ["min_weeks", "within_months", "source_in", "source_not_in", "same_side", "present", "absent"] as const;
+export type CheckOp = (typeof CHECK_OPS)[number];
+
+export interface PropertyCheck {
+  op: CheckOp;
+  /** Which kind of fact the check reads, e.g. "conservative_treatment" or "mri". See domain/rules/facts.ts. */
+  fact: string;
 }
 
-export interface Primitive<P = unknown> {
-  type: string;
-  /** Shown in the primitive dropdown. */
+export type PropertyValue = string | number | boolean | string[];
+
+/**
+ * One thing the insurer states about a criterion or a policy: "Duration ...... 6 weeks".
+ * Each policy defines its own; there is no global list. Without a check, a person reviews it.
+ */
+export interface Property {
+  key: string;
   label: string;
-  /** One line explaining what the primitive checks, for editors. */
-  summary: string;
-  paramsSchema: ZodType<P>;
-  /** Starting params when an editor picks this primitive. */
-  defaultParams: P;
-  evaluate(params: P, facts: Fact[], context: EvaluationContext): PrimitiveResult;
-  /** The single source of human-readable rule text. */
-  describe(params: P): string;
+  value: PropertyValue;
+  unit?: string;
+  check?: PropertyCheck;
+  /** Set when the value is inferred rather than stated by the insurer: what was assumed and why. */
+  assumption?: string;
 }
 
 /* ----------------------------- Policy model ----------------------------- */
@@ -107,23 +121,10 @@ export type Setting = "outpatient" | "inpatient";
 export type Channel = "api" | "portal" | "fax";
 export type IncompleteHandling = "amendable" | "deny_resubmit_new" | "unspecified";
 
+/** What the policy covers. Plan types are a policy property (plan_types), because only some insurers state them. */
 export interface Applicability {
   cptCodes: string[];
-  planTypes: string[] | "all";
   settings: Setting[] | "all";
-}
-
-export interface Submission {
-  channels: Channel[];
-  requiredAttachments: string[];
-  incompleteRequestHandling: IncompleteHandling;
-}
-
-export interface SourceCitation {
-  /** Insurer's own section label, e.g. "§2b" or "Criterion 2". */
-  section: string;
-  /** Verbatim insurer text this criterion encodes. */
-  excerpt: string;
 }
 
 export interface Criterion {
@@ -131,14 +132,14 @@ export interface Criterion {
   policyVersionId: string;
   /** Stable slug that persists across versions. Diffs and analytics join on key. */
   key: string;
+  /** The insurer's own reference, exactly as written: "2b", "(2)", or a table row label. Never invented. */
+  ref: string;
   displayLabel: string;
-  type: string;
-  params: Record<string, unknown>;
+  properties: Property[];
   evaluationMode: EvaluationMode;
-  sourceCitation: SourceCitation;
-  interpretationNote: string | null;
-  /** True when the note records a guess rather than a stated rule. */
-  isAssumption: boolean;
+  failureType: FailureType;
+  /** Verbatim insurer text this criterion encodes. Shown behind "Source", never as the main text. */
+  excerpt: string;
   sortOrder: number;
 }
 
@@ -146,15 +147,17 @@ export interface PolicyException {
   id: string;
   policyVersionId: string;
   key: string;
+  /** The insurer's own reference, as for criteria. */
+  ref: string;
   displayLabel: string;
   /** Any one of these conditions activates the exception. */
   triggers: string[];
   /** Exact criterion keys waived. There is no "waive everything". */
   waivesCriterionKeys: string[];
   evaluationMode: EvaluationMode;
-  sourceCitation: SourceCitation;
-  interpretationNote: string | null;
-  isAssumption: boolean;
+  excerpt: string;
+  /** Set when part of the exception is inferred (for example which criteria it waives). */
+  assumption: string | null;
 }
 
 export interface PolicyVersion {
@@ -171,7 +174,8 @@ export interface PolicyVersion {
   sourceDocumentHash: string | null;
   applicability: Applicability;
   logic: "ALL";
-  submission: Submission;
+  /** Policy-level properties the insurer states: plan types, submission channels, attachments, incomplete requests. */
+  properties: Property[];
   criteria: Criterion[];
   exceptions: PolicyException[];
   changeNote: string | null;
@@ -190,7 +194,7 @@ export type VersionEditableFields = Pick<
   PolicyVersion,
   | "applicability"
   | "logic"
-  | "submission"
+  | "properties"
   | "criteria"
   | "exceptions"
   | "sourceRevisionLabel"
@@ -232,6 +236,7 @@ export interface RulesSnapshot {
   policyId: string;
   externalPolicyId: string;
   title: string;
+  bodySite: string;
   versionId: string;
   versionNumber: number;
   sourceRevisionLabel: string | null;
@@ -239,21 +244,25 @@ export interface RulesSnapshot {
   sourceDocumentHash: string | null;
   applicability: Applicability;
   logic: "ALL";
-  submission: Submission;
+  properties: Property[];
   criteria: Array<
-    Pick<Criterion, "key" | "displayLabel" | "type" | "params" | "evaluationMode" | "sourceCitation"> & {
-      interpretationNote: string | null;
+    Pick<Criterion, "key" | "ref" | "displayLabel" | "properties" | "evaluationMode" | "failureType" | "excerpt"> & {
+      /** True when any property is an assumption. */
       isAssumption: boolean;
-      /** describe() output at evaluation time. */
+      /** Plain-English rule text at evaluation time. */
       text: string;
     }
   >;
   exceptions: Array<
-    Pick<
-      PolicyException,
-      "key" | "displayLabel" | "triggers" | "waivesCriterionKeys" | "evaluationMode" | "sourceCitation"
-    > & { interpretationNote: string | null; isAssumption: boolean }
+    Pick<PolicyException, "key" | "ref" | "displayLabel" | "triggers" | "waivesCriterionKeys" | "evaluationMode" | "excerpt" | "assumption">
   >;
+}
+
+export interface PropertyResult {
+  key: string;
+  label: string;
+  status: Exclude<CriterionStatus, "waived">;
+  detail: string;
 }
 
 export interface CriterionResult {
@@ -264,10 +273,13 @@ export interface CriterionResult {
   reason: string;
   evidenceRefs: FactRef[];
   waivedByExceptionKey?: string;
-  sourceCitation: SourceCitation;
-  /** The rule in plain English (describe()). */
+  ref: string;
+  excerpt: string;
+  /** The rule in plain English. */
   ruleText: string;
   isAssumption: boolean;
+  /** One result per property, in order. Empty when the criterion was waived or recorded without detail. */
+  propertyResults?: PropertyResult[];
 }
 
 export type ExceptionStatus = "not_triggered" | "applied" | "needs_review";
@@ -279,7 +291,8 @@ export interface ExceptionResult {
   triggeredBy: string[];
   evidenceRefs: FactRef[];
   waivesCriterionKeys: string[];
-  sourceCitation: SourceCitation;
+  ref: string;
+  excerpt: string;
   isAssumption: boolean;
 }
 
@@ -320,22 +333,33 @@ export interface Evaluation extends EvaluationOutcome {
   input: EvaluationInput;
   engineVersion: string;
   createdAt: string;
+  /**
+   * "engine" = the facts were run through the rules engine (can be replayed exactly).
+   * "recorded" = a case's outcome that was imported with its results already decided, so a re-check can only
+   * carry results forward for criteria that did not change. Missing means "engine".
+   */
+  origin?: "engine" | "recorded";
 }
 
 export type AuditAction =
   | "created_draft"
+  | "created_policy"
   | "edited"
   | "published"
   | "archived"
   | "cloned"
   | "test_run"
-  | "rollback";
+  | "rollback"
+  | "evaluated"
+  | "test_case_saved"
+  | "config_changed"
+  | "source_observed";
 
 export interface AuditLog {
   id: string;
   actor: string;
   action: AuditAction;
-  entityType: "policy_version" | "policy" | "evaluation";
+  entityType: "policy_version" | "policy" | "evaluation" | "test_case" | "config" | "source_document";
   entityId: string;
   before: unknown;
   after: unknown;
@@ -354,7 +378,7 @@ export interface PriorAuthRequirement {
 export interface ValidationIssue {
   code: string;
   message: string;
-  /** e.g. "criteria.conservative_care.params.minWeeks" */
+  /** e.g. "criteria.conservative_care.properties.duration.value" */
   path: string;
   criterionKey?: string;
 }

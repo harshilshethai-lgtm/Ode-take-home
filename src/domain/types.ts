@@ -38,6 +38,12 @@ export interface Order {
   assigneeId: string | null;
   /** One line, e.g. "PT notes p.4 missing". */
   reason: string;
+  /** Clinical review is only confirming a coordinator fix. */
+  confirmOnly?: boolean;
+  /** Approved by linking an approval already on file (CV-2). */
+  linkedApproval?: boolean;
+  /** Checks that put the order in Needs correction. CV-1 and CO-5 return to coverage. */
+  blockingChecks?: string[];
   nextAction: string;
   attachmentCount: number;
   policyRef: string | null;

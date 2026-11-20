@@ -18,10 +18,10 @@ const outDir = new URL("../screenshots/", import.meta.url).pathname;
 const SCREENS: { name: string; path: string; prepare?: (page: import("playwright").Page) => Promise<void> }[] = [
   { name: "worklist", path: "/" },
   {
-    name: "worklist-unassigned",
+    name: "worklist-nurse",
     path: "/",
     prepare: async (page) => {
-      await page.getByRole("tab", { name: /Unassigned/ }).click();
+      await page.getByRole("tab", { name: /Nurse/ }).click();
     },
   },
   { name: "settings-rules", path: "/settings" },
@@ -34,6 +34,18 @@ const SCREENS: { name: string; path: string; prepare?: (page: import("playwright
     },
   },
   { name: "analytics", path: "/analytics" },
+  { name: "case-kirk", path: "/case/case-1-kirk" },
+  {
+    name: "case-kirk-cited",
+    path: "/case/case-1-kirk",
+    prepare: async (page) => {
+      await page.getByRole("button", { name: "p.3" }).first().click();
+      await page.waitForTimeout(800);
+    },
+  },
+  { name: "case-scott", path: "/case/case-2-scott" },
+  { name: "case-sulu", path: "/case/case-3-sulu" },
+  { name: "case-odo", path: "/case/case-20-odo" },
 ];
 
 mkdirSync(outDir, { recursive: true });
@@ -46,8 +58,11 @@ for (const scheme of ["light", "dark"] as const) {
   for (const s of SCREENS) {
     await page.goto(base + s.path);
     await page.waitForLoadState("networkidle");
+    if (s.path.startsWith("/case")) {
+      await page.locator("canvas, :text('No packet')").first().waitFor({ timeout: 8000 }).catch(() => {});
+    }
     await s.prepare?.(page);
-    await page.waitForTimeout(250);
+    await page.waitForTimeout(300);
     const file = `${outDir}${tag}-${s.name}-${scheme}.png`;
     await page.screenshot({ path: file });
     console.log(file);

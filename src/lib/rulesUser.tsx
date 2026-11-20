@@ -19,8 +19,9 @@ export function RulesUserProvider({ children }: { children: ReactNode }) {
   return <RulesUserContext.Provider value={{ user, setUserId: setId }}>{children}</RulesUserContext.Provider>;
 }
 
+const FALLBACK: Ctx = { user: RULES_USERS[0], setUserId: () => {} };
+
+/** Works without the provider too (the legacy rule pages), acting as the first stub user. */
 export function useRulesUser(): Ctx {
-  const ctx = useContext(RulesUserContext);
-  if (!ctx) throw new Error("useRulesUser must be used inside RulesUserProvider");
-  return ctx;
+  return useContext(RulesUserContext) ?? FALLBACK;
 }

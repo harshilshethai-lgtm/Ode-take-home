@@ -6,12 +6,14 @@ interface Props {
   page: number;
   /** Verbatim excerpt, shown on hover. */
   excerpt?: string;
+  /** Replaces the default "p.N" text, e.g. "Policy" when the page number would be ambiguous. */
+  label?: string;
   onOpen?: () => void;
   className?: string;
 }
 
 /** "p.3": opens the source PDF at that page. Every value from a PDF carries one. */
-export function CitationChip({ page, excerpt, onOpen, className }: Props) {
+export function CitationChip({ page, excerpt, label, onOpen, className }: Props) {
   return (
     <Tip content={excerpt ? `“${excerpt}”` : `Open page ${page}`}>
       <button
@@ -23,7 +25,7 @@ export function CitationChip({ page, excerpt, onOpen, className }: Props) {
           className,
         )}
       >
-        p.{page}
+        {label ?? `p.${page}`}
       </button>
     </Tip>
   );

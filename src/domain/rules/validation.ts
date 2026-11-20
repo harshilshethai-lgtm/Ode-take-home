@@ -1,11 +1,12 @@
 // Validation for a policy version. Run on every save (never rejects a draft, so autosave works on half-finished
 // work) and again, stricter, on publish.
 
-import { describeCriterion } from "./describe";
+import { describeCriterion, planTypeLabel } from "./describe";
 import { isISODate, rangesOverlap } from "./dates";
-import { getPrimitive } from "./primitives/registry";
-import { planTypeLabel } from "./describe";
-import type { Payer, Policy, PolicyVersion, ValidationIssue, ValidationResult } from "./types";
+import { getFactKind } from "./facts";
+import { POLICY_PROPERTY, incompleteHandlingOf } from "./policyProperties";
+import { CHECK_OPS } from "./types";
+import type { Payer, Policy, PolicyVersion, Property, ValidationIssue, ValidationResult } from "./types";
 import { deriveStatus, sharedClaims } from "./versionStatus";
 
 export const KEY_PATTERN = /^[a-z][a-z0-9_]*$/;
@@ -31,6 +32,47 @@ function hasText(s: string | null | undefined): boolean {
   return !!s && s.trim().length > 0;
 }
 
+const NUMBER_OPS = new Set(["min_weeks", "within_months"]);
+const LIST_OPS = new Set(["source_in", "source_not_in"]);
+
+/** Property shape and check problems, reported against `${at}.properties.<key>`. */
+function checkProperties(
+  props: Property[],
+  at: string,
+  name: string,
+  err: (code: string, path: string, message: string) => void,
+  warn: (code: string, path: string, message: string) => void,
+) {
+  const seen = new Set<string>();
+  for (const p of props) {
+    const path = `${at}.properties.${p.key || "(new)"}`;
+    const label = p.label || p.key || "A property";
+    if (!hasText(p.label)) err("property.label.missing", `${path}.label`, `${name}: a property needs a label.`);
+    if (!KEY_PATTERN.test(p.key)) err("property.key.invalid", `${path}.key`, `${name}: ${label} needs a key like "duration".`);
+    else if (seen.has(p.key)) err("property.key.duplicate", `${path}.key`, `${name}: two properties are called "${label}".`);
+    seen.add(p.key);
+    if (p.value === "" || (Array.isArray(p.value) && p.value.length === 0)) {
+      err("property.value.missing", `${path}.value`, `${name}: ${label} needs a value.`);
+    }
+    if (p.assumption !== undefined && !hasText(p.assumption)) {
+      err("property.assumption.note", `${path}.assumption`, `${name}: explain what ${label} assumes.`);
+    } else if (hasText(p.assumption)) {
+      warn("assumption", path, `${name}: ${label} is an assumption (${p.assumption}). Confirm with the payer.`);
+    }
+    if (!p.check) continue;
+    const { op, fact } = p.check;
+    if (!(CHECK_OPS as readonly string[]).includes(op)) err("property.check.op", `${path}.check`, `${name}: ${label} has an unknown check "${op}".`);
+    if (!getFactKind(fact)) err("property.check.fact", `${path}.check`, `${name}: ${label} checks "${fact || "nothing"}"; pick what it checks.`);
+    if (NUMBER_OPS.has(op) && !(typeof p.value === "number" && p.value > 0)) {
+      err("property.value.number", `${path}.value`, `${name}: ${label} needs a number above zero for this check.`);
+    }
+    if (LIST_OPS.has(op) && !Array.isArray(p.value)) err("property.value.list", `${path}.value`, `${name}: ${label} needs a list of sources.`);
+    if (op === "min_weeks" && getFactKind(fact) && !getFactKind(fact)!.duration) {
+      err("property.check.weeks", `${path}.check`, `${name}: weeks cannot be measured for this fact.`);
+    }
+  }
+}
+
 export function validateVersion(version: PolicyVersion, ctx: ValidationContext, publish?: PublishRequest): ValidationResult {
   const errors: ValidationIssue[] = [];
   const warnings: ValidationIssue[] = [];
@@ -51,27 +93,14 @@ export function validateVersion(version: PolicyVersion, ctx: ValidationContext, 
     keys.add(c.key);
     if (!hasText(c.displayLabel)) err("criterion.label.missing", `${at}.displayLabel`, `Criterion "${c.key}" needs a label.`, c.key);
 
-    const prim = getPrimitive(c.type);
-    if (!prim) {
-      err("criterion.type.invalid", `${at}.type`, `${name}: "${c.type}" is not a known rule type.`, c.key);
-    } else {
-      const parsed = prim.paramsSchema.safeParse(c.params);
-      if (!parsed.success) {
-        for (const issue of parsed.error.issues) {
-          const field = issue.path.join(".") || "(params)";
-          err("criterion.params.invalid", `${at}.params.${field}`, `${name}: ${field} ${issue.message.toLowerCase()}`, c.key);
-        }
-      }
+    if (!hasText(c.ref)) err("criterion.ref.missing", `${at}.ref`, `${name}: add the insurer's own reference, e.g. "2b" or "(2)".`, c.key);
+    if (!hasText(c.excerpt)) err("criterion.excerpt.missing", `${at}.excerpt`, `${name}: paste the verbatim insurer text this criterion encodes.`, c.key);
+    const accepted = c.properties.filter((p) => p.check?.op === "source_in").flatMap((p) => (Array.isArray(p.value) ? p.value : []));
+    const excluded = c.properties.filter((p) => p.check?.op === "source_not_in").flatMap((p) => (Array.isArray(p.value) ? p.value : []));
+    if (accepted.some((x) => excluded.includes(x))) {
+      err("criterion.sources.overlap", `${at}.properties`, `${name}: a source cannot be both accepted and excluded.`, c.key);
     }
-    if (!hasText(c.sourceCitation?.section) || !hasText(c.sourceCitation?.excerpt)) {
-      err("criterion.citation.missing", `${at}.sourceCitation`, `${name}: add the insurer's section label and the verbatim excerpt this rule encodes.`, c.key);
-    }
-    if (c.isAssumption) {
-      warn("assumption", at, `${name}: encodes an assumption${hasText(c.interpretationNote) ? ` (${c.interpretationNote})` : ""}. Confirm with the payer.`, c.key);
-      if (!hasText(c.interpretationNote)) {
-        err("criterion.assumption.note", `${at}.interpretationNote`, `${name}: explain the assumption in the interpretation note.`, c.key);
-      }
-    }
+    checkProperties(c.properties, at, name, (code, path, m) => err(code, path, m, c.key), (code, path, m) => warn(code, path, m, c.key));
   }
 
   /* ---- exceptions ---- */
@@ -88,12 +117,11 @@ export function validateVersion(version: PolicyVersion, ctx: ValidationContext, 
     for (const k of e.waivesCriterionKeys) {
       if (!keys.has(k)) err("exception.waives.unknown", `${at}.waivesCriterionKeys`, `${name}: waives "${k}", which is not a criterion in this version.`);
     }
-    if (!hasText(e.sourceCitation?.section) || !hasText(e.sourceCitation?.excerpt)) {
-      err("exception.citation.missing", `${at}.sourceCitation`, `${name}: add the insurer's section label and verbatim excerpt.`);
-    }
-    if (e.isAssumption) {
-      warn("assumption", at, `${name}: encodes an assumption${hasText(e.interpretationNote) ? ` (${e.interpretationNote})` : ""}. Confirm with the payer.`);
-      if (!hasText(e.interpretationNote)) err("exception.assumption.note", `${at}.interpretationNote`, `${name}: explain the assumption in the interpretation note.`);
+    if (!hasText(e.ref)) err("exception.ref.missing", `${at}.ref`, `${name}: add the insurer's own reference.`);
+    if (!hasText(e.excerpt)) err("exception.excerpt.missing", `${at}.excerpt`, `${name}: paste the verbatim insurer text.`);
+    if (e.assumption !== null) {
+      if (hasText(e.assumption)) warn("assumption", at, `${name}: encodes an assumption (${e.assumption}). Confirm with the payer.`);
+      else err("exception.assumption.note", `${at}.assumption`, `${name}: explain what is assumed.`);
     }
   }
 
@@ -104,7 +132,7 @@ export function validateVersion(version: PolicyVersion, ctx: ValidationContext, 
     if (!CPT_PATTERN.test(code)) err("applicability.cpt.invalid", "applicability.cptCodes", `"${code}" is not a valid CPT code (5 characters).`);
   }
   if (new Set(app.cptCodes).size !== app.cptCodes.length) err("applicability.cpt.duplicate", "applicability.cptCodes", "A CPT code is listed twice.");
-  if (app.planTypes !== "all" && app.planTypes.length === 0) err("applicability.plans.empty", "applicability.planTypes", 'Choose "all plans" or list at least one plan type.');
+  checkProperties(version.properties, "policy", "Policy", err, warn);
   if (app.settings !== "all" && app.settings.length === 0) err("applicability.settings.empty", "applicability.settings", 'Choose "all settings" or pick at least one.');
 
   /* ---- publish-only checks ---- */
@@ -140,7 +168,7 @@ export function validateVersion(version: PolicyVersion, ctx: ValidationContext, 
     if (o.policyId === version.policyId) continue;
     const otherPolicy = ctx.policies.find((p) => p.id === o.policyId);
     if (!otherPolicy || otherPolicy.payerId !== ctx.policy.payerId || !o.effectiveFrom) continue;
-    const shared = sharedClaims(app, o.applicability);
+    const shared = sharedClaims(version, o);
     if (!shared) continue;
     if (!rangesOverlap(windowFrom, null, o.effectiveFrom, o.effectiveTo)) continue;
     const plans = shared.planTypes === "all" ? "all plan types" : shared.planTypes.map(planTypeLabel).join(", ");
@@ -155,8 +183,8 @@ export function validateVersion(version: PolicyVersion, ctx: ValidationContext, 
   if (ctx.testCaseCount < MIN_TEST_CASES) {
     warn("tests.few", "testCases", `This policy has ${ctx.testCaseCount} test case${ctx.testCaseCount === 1 ? "" : "s"}; add at least ${MIN_TEST_CASES} so changes can be checked.`);
   }
-  if (version.submission.incompleteRequestHandling === "unspecified") {
-    warn("submission.incomplete.unspecified", "submission.incompleteRequestHandling", "The policy does not say whether incomplete requests can be amended. Confirm with the payer.");
+  if (incompleteHandlingOf(version) === "unspecified") {
+    warn("policy.incomplete.unspecified", `policy.properties.${POLICY_PROPERTY.incompleteRequests}`, "The policy does not say whether incomplete requests can be amended. Confirm with the payer.");
   }
 
   return { errors, warnings };

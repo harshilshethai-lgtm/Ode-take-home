@@ -1,0 +1,115 @@
+---
+description: Design system for every screen in this repo. Dense, quiet, Linear-inspired.
+alwaysApply: true
+---
+
+# Design system
+
+Inspired by Linear: dense, quiet, calm, keyboard-first. Content leads; chrome stays out of the way.
+Inspiration only. Do not copy Linear's branding or assets.
+Tokens live in `src/index.css` (Tailwind v4 `@theme`). Enum labels live in `src/lib/labels.ts`.
+Enforced by `npm run lint:design` and `src/copyBudget.test.tsx`. Both run in CI.
+
+## Principles
+
+1. Content over chrome. Data is the loudest thing on screen. Borders, backgrounds and labels whisper.
+2. Say it once, in as few words as possible. If a label, icon or position already explains it, add no sentence.
+3. Color means status, nothing else. Everything else is neutral gray.
+4. Density with rhythm. Small type, tight rows, 4px spacing. Hierarchy comes from weight and gray level, not size.
+5. Progressive disclosure. Show the answer. Details, source text and internals live one click (or hover) away.
+
+## Tokens (only these values are allowed)
+
+- Font: Inter (`cv11`, `ss01`), `tabular-nums` for every number, date and ID column.
+  Monospace (JetBrains Mono, 12px) only for IDs such as MRN and order number.
+- Type scale (use the named utilities; the default Tailwind scale is removed):
+
+  | Utility        | Size / line height | Weight | Use                         |
+  | -------------- | ------------------ | ------ | --------------------------- |
+  | `text-caption` | 12 / 16            | 400    | Captions and meta           |
+  | `text-body`    | 13 / 20            | 400    | Body and table default      |
+  | `text-emph`    | 14 / 20            | 500    | Emphasis                    |
+  | `text-section` | 16 / 24            | 600    | Section title               |
+  | `text-title`   | 20 / 28            | 600    | Page title (one per page)   |
+
+  Weights: 400, 500, 600 only. Never 700+. Never text larger than 20px.
+- Text color, three levels only: `text-fg` (zinc-900 / dark zinc-100), `text-fg-2` (zinc-500), `text-fg-3` (zinc-400).
+- Surfaces: `bg-app` (#FBFBFC), `bg-panel` (white), `bg-sidebar` (zinc-50). Hairlines are `border-line`
+  (zinc-200/60). No shadows except `shadow-sm` on popovers and menus.
+- Accent: one indigo (indigo-600) for the primary button, focus rings, the selected nav item and links.
+  At most one primary button (`variant="default"`) per view.
+- Status (6px dot plus gray label). Labels stay zinc-700. Only the dot is colored.
+
+  | Dot          | Statuses                                  |
+  | ------------ | ----------------------------------------- |
+  | green-500    | Ready, Approved                           |
+  | amber-500    | Hold, Needs documents                     |
+  | red-500      | Blocked, Denied, Unreadable               |
+  | violet-500   | Nurse review                              |
+  | zinc-400     | Closed, Unassigned, Automated, Submitted  |
+
+- Spacing: 4px grid, Tailwind 1, 2, 3, 4, 6, 8 (no half steps). Page padding 24px (`p-6`).
+  Section gap 24px. Card padding 12 to 16px.
+- Radius: 6px controls and chips (`rounded-md`), 8px cards and panels (`rounded-lg`).
+  Nothing pill-shaped except avatars and status dots.
+- Sizes: table rows 36px, list items 32px, inputs and buttons 28px (32px for the primary button).
+  Icons 14px in tables, 16px elsewhere, Lucide only, stroke 1.5.
+
+## Copy rules
+
+- Page header is the title only, optionally with a count in secondary gray ("Worklist 9").
+  No subtitles or paragraphs under titles. Explanations go in a `?` tooltip or the docs.
+- Labels: at most 3 words, sentence case, no trailing colons on table headers.
+- Helper text only where an action is irreversible: one line, at most 12 words.
+- Never show internal identifiers (snake_case, fact keys, enum values like `patient_reported`).
+  Map every enum to a human label in `src/lib/labels.ts`. Raw keys only behind an "Advanced" or dev toggle.
+- Dates: tables `Wed 11/18 · 2:30 PM`. Relative where it matters (`in 2d`, `3h ago`). Absolute ISO only in tooltips.
+- Numbers and rules read as short facts: `≥ 6 wks`, `40 / 42 days`. Not sentences.
+- The AI summary is at most 2 sentences and 40 words. Engine reason sentences show on expand, not by default.
+- Banners: at most one per page, only for things that block the user's work.
+  Read-only is a lock icon next to the title, never a banner.
+
+## Components
+
+Shared building blocks live in `src/components/ui/`: StatusDot, PropertyList, CitationChip, SourceTag,
+CollapsibleSection, DataTable, FlagIcons, Kbd, plus shadcn-style primitives (Button, Tooltip, Popover, Avatar, Tabs).
+Do not introduce another component library or one-off styles.
+
+- Tables: no zebra, no vertical borders, hairline row dividers, hover `bg-hover`, left-align text,
+  right-align numbers, at most 8 columns (the rest goes in a tooltip or detail view).
+  Selected row: 2px indigo left border plus `bg-hover`.
+- Chips and tags: neutral only (`bg-chip text-chip-fg`, 12px). At most 2 visible per row, then `+N` with a tooltip.
+  Never a colored chip for something that is not a status.
+- Flags column: at most 2 icons per row, ordered by severity, each with a tooltip. No legend button.
+- Filters: one compact toolbar row. Search, then filter buttons that open popovers. Applied filters are removable
+  neutral chips. No row of KPI pills. Counts belong in the view tabs.
+- Tabs: text tabs, counts in secondary gray, underline on the active one. Each tab is a saved filter.
+- Detail panes: label/value property lists, two columns, label 12px secondary, value 13px.
+  Collapsible sections use a 13px/500 header with a chevron and count ("Rules checked 4/4").
+- Empty, loading and error states: one line of gray text plus at most one action. Skeleton rows, not spinners.
+- Keyboard: J/K move between rows, Enter opens, Esc closes or goes back, Cmd-K opens the command palette,
+  A assigns to me, `/` focuses search. Show shortcut hints in tooltips.
+- Motion: 120 to 160ms ease-out on hover, expand and panel open only. No bounces, no page transitions.
+- Dark mode: supported from tokens. Never hard-code colors in components.
+
+## Forbidden (the linter fails on these)
+
+hex/rgb colors outside `src/index.css`; `text-xs`/`text-sm`/`text-lg` and up; `font-bold` and heavier;
+`shadow-md` and up; arbitrary values like `p-[13px]`; half-step spacing like `px-2.5`;
+`rounded-full` outside avatar and status dot; snake_case in JSX text or props;
+more than one `variant="default"` Button per page file.
+
+## Visual review loop
+
+After building or changing any screen: `npm run screenshots` (Playwright, 1440x900, light and dark, into
+`/screenshots`), review against this checklist, and list violations and fixes before reporting the stage done.
+
+- [ ] One clear primary action
+- [ ] Nothing larger than 20px
+- [ ] No explanatory paragraphs
+- [ ] Color only on status
+- [ ] At most 2 chips per row
+- [ ] No internal keys
+- [ ] Numbers tabular and aligned
+- [ ] Consistent 4px rhythm
+- [ ] Would a Linear designer delete anything here? If yes, delete it.

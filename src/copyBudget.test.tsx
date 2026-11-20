@@ -8,6 +8,9 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "@/App";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { SEED_ORDERS } from "@/data/orders";
+import { rulesApi } from "@/data/rules";
+import { recordOrderEvaluations } from "@/data/rules/orderEvaluations";
 import { PersonaProvider } from "@/lib/persona";
 import { OrdersProvider } from "@/lib/useWorklistState";
 
@@ -22,6 +25,14 @@ vi.hoisted(() => {
     clear: () => data.clear(),
   };
   Object.defineProperty(globalThis, "localStorage", { value: mem, configurable: true });
+  if (!("ResizeObserver" in globalThis)) {
+    class ResizeObserver {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    }
+    Object.defineProperty(globalThis, "ResizeObserver", { value: ResizeObserver, configurable: true });
+  }
 });
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -118,13 +129,121 @@ describe("copy budget", () => {
     }
   });
 
-  it("Analytics", () => {
+  it("Settings: rule library list, then a policy card with every row expanded", () => {
+    render("/settings");
+    assertBudget();
+    const rows = [...host.querySelectorAll('nav[aria-label="Settings sections"] ~ div button')].filter((b) => b.textContent?.includes("Active since"));
+    expect(rows.length).toBe(3);
+    expect(host.textContent).toContain("Recent changes");
+    expect(host.textContent).toContain("New policy");
+    click([...rows].find((r) => r.textContent?.includes("RAD-114"))!);
+    for (const toggle of host.querySelectorAll("button[aria-expanded=false]")) click(toggle);
+    assertBudget();
+    expect(host.textContent).toContain("Red flagsWaives 2a, 2b, 2c");
+    expect(host.textContent).toContain("Source · 2b");
+    expect(host.textContent).not.toContain("Patient-reported");
+    expect(host.textContent).toContain("Submit viaAPI or Portal");
+  });
+
+  it("Settings: version panel and a superseded version", () => {
+    render("/settings?policy=pol_rad114");
+    assertBudget();
+    const open = [...host.querySelectorAll("button")].find((b) => b.textContent?.includes("Versions"))!;
+    click(open);
+    // the panel renders in a portal
+    const panel = document.querySelector('[role="dialog"]')!;
+    expect(panel.textContent).toContain("Superseded");
+    expect(panel.textContent).toContain("Active");
+    const v2 = [...panel.querySelectorAll("li button")].find((b) => b.textContent?.includes("v2"))!;
+    click(v2);
+    expect(host.textContent).toContain("You're viewing v2 (superseded Jan 1, 2026).");
+    expect(host.textContent).toContain("View active version");
+    assertBudget();
+    click([...host.querySelectorAll("button")].find((b) => b.textContent?.includes("View active version"))!);
+    expect(host.textContent).not.toContain("You're viewing");
+  });
+
+  it("Settings: compare view", () => {
+    render("/settings?policy=pol_rad114&compare=ver_rad114_1,ver_rad114_3");
+    assertBudget();
+    expect(host.textContent).toContain("Added");
+    expect(host.textContent).toContain("Changed");
+  });
+
+  it("Operations", () => {
     render("/analytics");
+    assertBudget();
+    expect(host.textContent).toContain("Operations");
+    expect(host.textContent).toContain("Illustrative data");
+    expect(host.textContent).toContain("Awaiting documents 3");
+    expect(host.textContent).toContain("Clinical review 4");
+    expect(host.textContent).toContain("Done today: 1 approved · 2 not required");
+  });
+
+  it("Impact", () => {
+    render("/impact");
+    assertBudget();
+    expect(host.textContent).toContain("Pilot impact");
+    expect(host.textContent).toContain("Illustrative data");
+    for (const toggle of host.querySelectorAll("button[aria-expanded=false]")) click(toggle);
     assertBudget();
   });
 
-  it("Case placeholder", () => {
+  it("Case: Kirk, sections expanded", () => {
     render("/case/case-1-kirk");
+    expect(host.textContent).toContain("ORD-58213");
+    for (const toggle of host.querySelectorAll("button[aria-expanded=false]")) click(toggle);
     assertBudget();
+  });
+
+  it("Case: Scott fax", () => {
+    render("/case/case-2-scott");
+    expect(host.textContent).toContain("ORD-58242");
+    expect(host.textContent).toContain("Fax");
+    for (const toggle of host.querySelectorAll("button[aria-expanded=false]")) click(toggle);
+    assertBudget();
+  });
+
+  it("Case: Sulu order", () => {
+    render("/case/case-3-sulu");
+    expect(host.textContent).toContain("ORD-58258");
+    expect(host.textContent).toContain("x 3 wks");
+    for (const toggle of host.querySelectorAll("button[aria-expanded=false]")) click(toggle);
+    assertBudget();
+  });
+
+  it("Case: Odo's blank fax", () => {
+    render("/case/case-20-odo");
+    assertBudget();
+    expect(host.textContent).toContain("Promenade Urgent Care");
+    expect(host.textContent).toContain("Blank fax");
+  });
+
+  describe("after a rule changes", () => {
+    const editor = { id: "e", name: "Ed Itor", role: "editor" as const };
+    const approver = { id: "a", name: "App Rover", role: "approver" as const };
+    beforeEach(() => {
+      rulesApi.reset();
+      recordOrderEvaluations(rulesApi, SEED_ORDERS);
+      const draft = rulesApi.createDraft("pol_rad114", { actor: editor });
+      rulesApi.patchVersion(draft.id, { criteria: draft.criteria.map((c) => (c.key === "symptom_duration" ? { ...c, properties: c.properties.map((p) => (p.key === "duration" ? { ...p, value: 8 } : p)) } : c)) }, editor);
+      rulesApi.publishVersion(draft.id, { effectiveFrom: "2026-11-09", changeNote: "Raises the symptom duration." }, approver);
+    });
+    afterEach(() => rulesApi.reset());
+
+    it("Case: rules-changed banner", () => {
+      render("/case/case-1-kirk");
+      expect(host.querySelectorAll('[role="status"]').length).toBe(1);
+      for (const toggle of host.querySelectorAll("button[aria-expanded=false]")) click(toggle);
+      assertBudget();
+    });
+
+    it("Settings: Operations re-check queue", () => {
+      render("/settings");
+      click([...host.querySelectorAll('nav[aria-label="Settings sections"] button')].find((b) => b.textContent === "Operations")!);
+      expect(host.textContent).toContain("Needs re-check");
+      for (const toggle of host.querySelectorAll("button[aria-expanded=false]")) click(toggle);
+      assertBudget();
+    });
   });
 });

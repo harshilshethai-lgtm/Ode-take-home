@@ -23,6 +23,16 @@ export function hoursUntil(scanAt: Date, now: Date): number {
   return (scanAt.getTime() - now.getTime()) / 36e5;
 }
 
+/**
+ * When the fix has to be done so the order is still a day before it would turn at risk.
+ * At risk starts at scan − (turnaround + 1 day). Fix-by is one day before that.
+ * Ferengi (72h) and a Tue 11/17 2:00 PM scan land on Thu 11/12 2:00 PM.
+ */
+export function fixByAt(scanAt: Date, insurer: string | null): Date {
+  const turnaround = (insurer && INSURER_TURNAROUND_HOURS[insurer]) || DEFAULT_TURNAROUND_HOURS;
+  return new Date(scanAt.getTime() - (turnaround + 48) * 36e5);
+}
+
 export function computeTimeRisk(args: {
   scanAt: Date | null;
   insurer: string | null;

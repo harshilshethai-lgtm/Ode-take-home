@@ -20,6 +20,7 @@
       {
         "id": "2a",
         "label": "Low back pain for 6+ weeks",
+        "display_label": "Low back pain for 6+ weeks",
         "policy_text": "Low back pain, with or without radicular symptoms, for 6 weeks or more",
         "fact": "symptom_duration_weeks",
         "op": ">=",
@@ -29,6 +30,7 @@
       {
         "id": "2b",
         "label": "6+ weeks of conservative treatment, documented",
+        "display_label": "6+ weeks of conservative treatment, documented",
         "policy_text": "6 weeks or more of conservative treatment in the past 6 months, such as physical therapy, chiropractic care or prescription medication, with documentation of the treatment and the response",
         "fact": "conservative_treatment.total_weeks",
         "op": ">=",
@@ -41,6 +43,7 @@
       {
         "id": "2c",
         "label": "X-rays first",
+        "display_label": "X-rays first",
         "policy_text": "Plain X-rays of the lumbar spine, unless a red-flag condition is present",
         "fact": "xray_same_region",
         "op": "exists",
@@ -49,6 +52,7 @@
       {
         "id": "2d",
         "label": "No lumbar MRI in 12 months",
+        "display_label": "No lumbar MRI in 12 months",
         "policy_text": "No lumbar MRI in the past 12 months, unless symptoms have materially changed",
         "fact": "prior_mri_same_region",
         "op": "not_within_months",

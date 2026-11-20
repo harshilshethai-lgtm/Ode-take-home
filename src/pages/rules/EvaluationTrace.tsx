@@ -1,16 +1,16 @@
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { FlaskConical, RotateCcw } from "lucide-react";
-import { Citation } from "@/components/rules/RuleView";
+import { ChevronDown, ChevronRight, FlaskConical, RotateCcw } from "lucide-react";
 import { RulesHeader } from "@/components/rules/RulesHeader";
-import { inputCls } from "@/components/rules/fields";
 import { AssumptionBadge, Banner, Button, Card, CriterionStatusBadge, EmptyState, ExceptionStatusBadge, OverallBadge, Pill, SectionTitle, VersionStatusBadge } from "@/components/rules/ui";
 import { ApiError } from "@/data/rules/service";
 import { SOURCE_LABEL, humanize } from "@/domain/rules/common";
 import { planTypeLabel } from "@/domain/rules/describe";
+import { STATUS_LABEL } from "@/domain/rules/engine";
 import type { CriterionResult, FactRef } from "@/domain/rules/types";
+import { affectedList, checkedAgainstText, rulesChangedText, versionHref } from "@/lib/evalNotice";
 import { useRulesUser } from "@/lib/rulesUser";
-import { fmtDateTime } from "@/lib/rulesFormat";
+import { caseHref, fmtDateTime } from "@/lib/rulesFormat";
 import { useRules } from "@/lib/useRules";
 
 export default function EvaluationTrace() {
@@ -18,7 +18,6 @@ export default function EvaluationTrace() {
   const api = useRules();
   const { user } = useRulesUser();
   const navigate = useNavigate();
-  const [serviceDate, setServiceDate] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<string | null>(null);
 
@@ -33,16 +32,14 @@ export default function EvaluationTrace() {
       </main>
     );
   }
-  const { evaluation: e, version, policy, payer, supersededBy } = trace;
+  const { evaluation: e, version, policy, payer, staleness } = trace;
   const snap = e.rulesSnapshot;
-  const versionLink = policy && version ? `/settings/rules/${policy.id}/versions/${version.id}` : null;
-  const rerunDate = serviceDate ?? e.serviceDate;
-  const hasAssumptions = !!snap && (snap.criteria.some((c) => c.isAssumption) || snap.exceptions.some((x) => x.isAssumption));
+  const versionLink = policy && version ? versionHref(policy.id, version.id) : null;
+  const hasAssumptions = !!snap && (snap.criteria.some((c) => c.isAssumption) || snap.exceptions.some((x) => !!x.assumption));
 
   const rerun = () => {
     try {
-      const next = api.rerunEvaluation(e.id, { serviceDate: rerunDate });
-      setServiceDate(null);
+      const next = api.recheckEvaluation(e.id, user.name);
       navigate(`/evaluations/${next.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Could not re-run.");
@@ -70,7 +67,7 @@ export default function EvaluationTrace() {
             Evaluation {e.id.replace("eval_", "#")} <OverallBadge overall={e.overall} />
           </h1>
           <p className="mt-1 text-sm text-slate-600">
-            Order <Link to={`/case/${e.orderRef}`} className="text-indigo-700 hover:underline">{e.orderRef}</Link> · patient {e.patientRef} · CPT {e.cptCode} · {planTypeLabel(e.planType)} · service date {e.serviceDate}
+            Order <OrderLink orderRef={e.orderRef} /> · patient {e.patientRef} · CPT {e.cptCode} · {planTypeLabel(e.planType)} · service date {e.serviceDate}
             {e.input.laterality ? ` · ${e.input.laterality}` : ""}
           </p>
           <p className="text-xs text-slate-500">Run {fmtDateTime(e.createdAt)} · engine {e.engineVersion}</p>
@@ -81,21 +78,12 @@ export default function EvaluationTrace() {
       {error && <div className="mb-3"><Banner tone="rose">{error}</Banner></div>}
       {saved && <div className="mb-3"><Banner tone="emerald">Saved as test case “{saved}”. It will run against every future draft of this policy.</Banner></div>}
 
-      {version && supersededBy && (
+      {staleness && (
         <div className="mb-4">
-          <Banner tone="amber" action={<Button className="shrink-0" onClick={rerun}><RotateCcw size={14} /> Re-run under current rules</Button>}>
-            <div>
-              Evaluated under v{version.versionNumber} (superseded by v{supersededBy.versionNumber} on {supersededBy.effectiveFrom}). Re-run under current rules?
-            </div>
-            <div className="mt-1.5 flex flex-wrap items-center gap-2 text-xs">
-              <label className="flex items-center gap-1.5">
-                Service date for the re-run
-                <input type="date" value={rerunDate} onChange={(ev) => setServiceDate(ev.target.value)} className={`${inputCls} !w-auto !py-0.5 text-xs`} />
-              </label>
-              {rerunDate < supersededBy.effectiveFrom! && (
-                <span>The service date is before v{supersededBy.versionNumber} takes effect, so v{version.versionNumber} still governs it. Move the date if the scan was rescheduled.</span>
-              )}
-            </div>
+          <Banner tone="amber" action={<Button className="shrink-0" onClick={rerun}><RotateCcw size={14} /> Re-run →</Button>}>
+            <div>{rulesChangedText(staleness.pinned.versionNumber, staleness.applicable.versionNumber, staleness.affected, staleness.affectedWaivers)}</div>
+            {staleness.affected.length > 0 && <div className="mt-1 text-xs">Changed: {affectedList(staleness.affected)}</div>}
+            {staleness.affectedWaivers.length > 0 && <div className="mt-1 text-xs">Waivers: {affectedList(staleness.affectedWaivers)}</div>}
           </Banner>
         </div>
       )}
@@ -118,10 +106,10 @@ export default function EvaluationTrace() {
               <div className="flex flex-wrap items-center gap-2">
                 {versionLink ? (
                   <Link to={versionLink} className="font-medium text-indigo-700 hover:underline">
-                    {snap.payerName} {snap.externalPolicyId} · v{snap.versionNumber}
+                    {checkedAgainstText(snap)}
                   </Link>
                 ) : (
-                  <span className="font-medium">{snap.payerName} {snap.externalPolicyId} · v{snap.versionNumber}</span>
+                  <span className="font-medium">{checkedAgainstText(snap)}</span>
                 )}
                 {version && <VersionStatusBadge status={version.derivedStatus} />}
                 {hasAssumptions && <AssumptionBadge title="This version contains assumptions that have not been confirmed with the payer." />}
@@ -182,7 +170,7 @@ export default function EvaluationTrace() {
                     <p className="text-xs text-slate-500">No trigger documented.</p>
                   )}
                   {x.evidenceRefs.length > 0 && <Evidence refs={x.evidenceRefs} orderRef={e.orderRef} />}
-                  <Citation section={x.sourceCitation.section} excerpt={x.sourceCitation.excerpt} />
+                  <Citation section={x.ref} excerpt={x.excerpt} />
                 </li>
               ))}
             </ul>
@@ -217,12 +205,22 @@ function CriterionRow({ r, orderRef, versionLink }: { r: CriterionResult; orderR
         {r.waivedByExceptionKey && <Pill tone="sky">Waived by {humanize(r.waivedByExceptionKey)}</Pill>}
       </div>
       <p className="mt-1.5 text-sm text-slate-800">{r.reason}</p>
-      <p className="mt-1 text-xs text-slate-500">Rule: {r.ruleText}</p>
+      {r.propertyResults && r.propertyResults.length > 0 ? (
+        <ul className="mt-1.5 space-y-0.5 text-xs text-slate-600">
+          {r.propertyResults.map((p) => (
+            <li key={p.key}>
+              <span className="font-medium text-slate-800">{p.label}</span> · {STATUS_LABEL[p.status]} · {p.detail}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-1 text-xs text-slate-500">Rule: {r.ruleText}</p>
+      )}
       {r.evidenceRefs.length > 0 && <Evidence refs={r.evidenceRefs} orderRef={orderRef} />}
       <div className="flex flex-wrap items-center gap-3">
-        <Citation section={r.sourceCitation.section} excerpt={r.sourceCitation.excerpt} />
+        <Citation section={r.ref} excerpt={r.excerpt} />
         {versionLink && (
-          <Link to={`${versionLink}#criterion-${r.criterionKey}`} className="mt-1.5 text-xs text-indigo-700 hover:underline">
+          <Link to={versionLink} className="mt-1.5 text-xs text-indigo-700 hover:underline">
             View criterion in policy
           </Link>
         )}
@@ -231,15 +229,36 @@ function CriterionRow({ r, orderRef, versionLink }: { r: CriterionResult; orderR
   );
 }
 
+function Citation({ section, excerpt }: { section: string; excerpt: string }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="mt-1.5">
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="inline-flex items-center gap-1 text-xs text-indigo-700 hover:underline">
+        {open ? <ChevronDown size={12} /> : <ChevronRight size={12} />} Source · {section || "no reference"}
+      </button>
+      {open && (
+        <blockquote className="mt-1 border-l-2 border-slate-300 bg-slate-50 px-3 py-2 text-xs italic text-slate-700">
+          {excerpt || <span className="not-italic text-rose-600">No excerpt.</span>}
+        </blockquote>
+      )}
+    </div>
+  );
+}
+
+/** Links to the case when the order is on the worklist; plain text otherwise. */
+function OrderLink({ orderRef, doc, children }: { orderRef: string; doc?: string; children?: React.ReactNode }) {
+  const href = caseHref(orderRef, doc);
+  const text = children ?? orderRef;
+  return href ? <Link to={href} className="text-indigo-700 hover:underline">{text}</Link> : <span>{text}</span>;
+}
+
 function Evidence({ refs, orderRef }: { refs: FactRef[]; orderRef: string }) {
   return (
     <ul className="mt-2 space-y-1">
       {refs.map((f) => (
         <li key={f.factId} className="rounded-md bg-slate-50 px-2.5 py-1.5 text-xs text-slate-700">
           <span className="font-medium">{SOURCE_LABEL[f.sourceType]}</span> · {f.date} ·{" "}
-          <Link to={`/case/${orderRef}?doc=${f.sourceDocumentId}`} className="text-indigo-700 hover:underline">
-            {f.sourceDocumentId}
-          </Link>
+          <OrderLink orderRef={orderRef} doc={f.sourceDocumentId}>{f.sourceDocumentId}</OrderLink>
           <div className="italic text-slate-600">“{f.excerpt}”</div>
         </li>
       ))}

@@ -1,9 +1,7 @@
 // Plain-English diff between two versions. Criteria and exceptions are matched by stable `key`, never by id.
 
-import { describeChannels, describeCriterion, describeException, INCOMPLETE_LABEL } from "./describe";
-import { getPrimitive } from "./primitives/registry";
-import { schemaToFields } from "./schemaFields";
-import type { Criterion, PolicyException, PolicyVersion } from "./types";
+import { describeCriterion, describeException, describeValue } from "./describe";
+import type { Criterion, PolicyException, PolicyVersion, Property } from "./types";
 
 export interface Seg {
   text: string;
@@ -20,10 +18,9 @@ export interface ValueChange {
 export interface CriterionSide {
   displayLabel: string;
   text: string;
-  section: string;
+  ref: string;
   excerpt: string;
   isAssumption: boolean;
-  interpretationNote: string | null;
   evaluationMode: string;
 }
 
@@ -55,7 +52,8 @@ export interface VersionDiff {
   criteria: CriterionDiff[];
   exceptions: ExceptionDiff[];
   applicability: ValueChange[];
-  submission: ValueChange[];
+  /** Policy-level properties: plan types, channels, attachments, incomplete requests, and any others. */
+  properties: ValueChange[];
   source: ValueChange[];
   /** True when nothing differs at all. */
   identical: boolean;
@@ -124,35 +122,41 @@ function side(c: Criterion): CriterionSide {
   return {
     displayLabel: c.displayLabel,
     text: describeCriterion(c),
-    section: c.sourceCitation.section,
-    excerpt: c.sourceCitation.excerpt,
-    isAssumption: c.isAssumption,
-    interpretationNote: c.interpretationNote,
+    ref: c.ref,
+    excerpt: c.excerpt,
+    isAssumption: c.properties.some((p) => !!p.assumption),
     evaluationMode: c.evaluationMode,
   };
 }
 
-function paramChanges(a: Criterion, b: Criterion): ValueChange[] {
-  if (a.type !== b.type) {
-    const la = getPrimitive(a.type)?.label ?? a.type;
-    const lb = getPrimitive(b.type)?.label ?? b.type;
-    return [{ label: "Rule type", from: la, to: lb }];
-  }
-  const prim = getPrimitive(a.type);
-  const fields = prim ? schemaToFields(prim.paramsSchema) : [];
-  const names = new Set([...Object.keys(a.params), ...Object.keys(b.params)]);
+const checkText = (p: Property) => (p.check ? `${p.check.op.replace(/_/g, " ")} (${p.check.fact.replace(/_/g, " ")})` : "not auto-checked");
+
+/** One change per property that differs, matched by key. */
+export function propertyChanges(a: Property[], b: Property[]): ValueChange[] {
+  const aBy = new Map(a.map((p) => [p.key, p]));
+  const bKeys = new Set(b.map((p) => p.key));
   const out: ValueChange[] = [];
-  for (const name of names) {
-    if (same(a.params[name], b.params[name])) continue;
-    out.push({ label: fields.find((f) => f.name === name)?.label ?? name, from: fmt(a.params[name]), to: fmt(b.params[name]) });
+  for (const pb of b) {
+    const pa = aBy.get(pb.key);
+    if (!pa) {
+      out.push({ label: pb.label, from: "(not set)", to: describeValue(pb) });
+      continue;
+    }
+    const va = describeValue(pa);
+    const vb = describeValue(pb);
+    if (va !== vb) out.push({ label: pb.label, from: va, to: vb });
+    if (pa.label !== pb.label) out.push({ label: "Property name", from: pa.label, to: pb.label });
+    if (!same(pa.check, pb.check)) out.push({ label: `${pb.label} check`, from: checkText(pa), to: checkText(pb) });
+    if ((pa.assumption ?? "") !== (pb.assumption ?? "")) out.push({ label: `${pb.label} assumption`, from: fmt(pa.assumption), to: fmt(pb.assumption) });
   }
+  for (const pa of a) if (!bKeys.has(pa.key)) out.push({ label: pa.label, from: describeValue(pa), to: "(removed)" });
   return out;
 }
 
-function citationChanges(a: { sourceCitation: { section: string; excerpt: string } }, b: { sourceCitation: { section: string; excerpt: string } }): ValueChange[] {
+function citationChanges(a: { ref: string; excerpt: string }, b: { ref: string; excerpt: string }): ValueChange[] {
   const out: ValueChange[] = [];
-  if (a.sourceCitation.section !== b.sourceCitation.section) out.push({ label: "Citation section", from: a.sourceCitation.section, to: b.sourceCitation.section });
-  if (a.sourceCitation.excerpt !== b.sourceCitation.excerpt) out.push({ label: "Citation excerpt", from: a.sourceCitation.excerpt, to: b.sourceCitation.excerpt });
+  if (a.ref !== b.ref) out.push({ label: "Reference", from: a.ref, to: b.ref });
+  if (a.excerpt !== b.excerpt) out.push({ label: "Source text", from: a.excerpt, to: b.excerpt });
   return out;
 }
 
@@ -170,12 +174,11 @@ function diffCriteria(a: PolicyVersion, b: PolicyVersion): CriterionDiff[] {
     const sa = side(ca);
     const sb = side(cb);
     const changes = [
-      ...paramChanges(ca, cb),
+      ...propertyChanges(ca.properties, cb.properties),
       ...compact([
         ca.displayLabel !== cb.displayLabel ? { label: "Label", from: ca.displayLabel, to: cb.displayLabel } : null,
         ca.evaluationMode !== cb.evaluationMode ? { label: "Evaluation mode", from: fmt(ca.evaluationMode), to: fmt(cb.evaluationMode) } : null,
-        ca.isAssumption !== cb.isAssumption ? { label: "Marked as assumption", from: fmt(ca.isAssumption), to: fmt(cb.isAssumption) } : null,
-        ca.interpretationNote !== cb.interpretationNote ? { label: "Interpretation note", from: fmt(ca.interpretationNote), to: fmt(cb.interpretationNote) } : null,
+        ca.failureType !== cb.failureType ? { label: "Failure type", from: fmt(ca.failureType), to: fmt(cb.failureType) } : null,
       ]),
     ];
     const cites = citationChanges(ca, cb);
@@ -223,7 +226,7 @@ function diffExceptions(a: PolicyVersion, b: PolicyVersion): ExceptionDiff[] {
             emphasis: "waiver_scope",
           },
       ea.evaluationMode !== eb.evaluationMode ? { label: "Evaluation mode", from: fmt(ea.evaluationMode), to: fmt(eb.evaluationMode) } : null,
-      ea.isAssumption !== eb.isAssumption ? { label: "Marked as assumption", from: fmt(ea.isAssumption), to: fmt(eb.isAssumption) } : null,
+      ea.assumption !== eb.assumption ? { label: "Assumption", from: fmt(ea.assumption), to: fmt(eb.assumption) } : null,
     ]);
     const cites = citationChanges(ea, eb);
     out.push({
@@ -244,28 +247,25 @@ function diffExceptions(a: PolicyVersion, b: PolicyVersion): ExceptionDiff[] {
 
 /* ---------- top level ---------- */
 
+/** How many things changed, as a person would count them: one per criterion, waiver or setting. */
+export function countChanges(d: VersionDiff): number {
+  const rows = (xs: Array<{ kind: string }>) => xs.filter((x) => x.kind !== "unchanged").length;
+  return rows(d.criteria) + rows(d.exceptions) + d.applicability.length + d.properties.length + d.source.length;
+}
+
 export function diffVersions(a: PolicyVersion, b: PolicyVersion): VersionDiff {
   const criteria = diffCriteria(a, b);
   const exceptions = diffExceptions(a, b);
 
   const applicability = compact<ValueChange>([
     listChange("CPT codes", a.applicability.cptCodes, b.applicability.cptCodes),
-    same(a.applicability.planTypes, b.applicability.planTypes)
-      ? null
-      : { label: "Plan types", from: fmt(a.applicability.planTypes === "all" ? "all plans" : a.applicability.planTypes), to: fmt(b.applicability.planTypes === "all" ? "all plans" : b.applicability.planTypes) },
     same(a.applicability.settings, b.applicability.settings)
       ? null
       : { label: "Settings", from: fmt(a.applicability.settings === "all" ? "all settings" : a.applicability.settings), to: fmt(b.applicability.settings === "all" ? "all settings" : b.applicability.settings) },
     a.logic !== b.logic ? { label: "Logic", from: a.logic, to: b.logic } : null,
   ]);
 
-  const submission = compact<ValueChange>([
-    same(a.submission.channels, b.submission.channels) ? null : { label: "Channels", from: describeChannels(a.submission.channels), to: describeChannels(b.submission.channels) },
-    listChange("Required attachments", a.submission.requiredAttachments, b.submission.requiredAttachments),
-    a.submission.incompleteRequestHandling !== b.submission.incompleteRequestHandling
-      ? { label: "Incomplete requests", from: INCOMPLETE_LABEL[a.submission.incompleteRequestHandling], to: INCOMPLETE_LABEL[b.submission.incompleteRequestHandling] }
-      : null,
-  ]);
+  const properties = propertyChanges(a.properties, b.properties);
 
   const source = compact<ValueChange>([
     a.sourceRevisionLabel !== b.sourceRevisionLabel ? { label: "Insurer revision", from: fmt(a.sourceRevisionLabel), to: fmt(b.sourceRevisionLabel) } : null,
@@ -276,7 +276,7 @@ export function diffVersions(a: PolicyVersion, b: PolicyVersion): VersionDiff {
   const identical =
     criteria.every((c) => c.kind === "unchanged") &&
     exceptions.every((e) => e.kind === "unchanged") &&
-    applicability.length + submission.length + source.length === 0;
+    applicability.length + properties.length + source.length === 0;
 
   return {
     a: { id: a.id, versionNumber: a.versionNumber },
@@ -284,7 +284,7 @@ export function diffVersions(a: PolicyVersion, b: PolicyVersion): VersionDiff {
     criteria,
     exceptions,
     applicability,
-    submission,
+    properties,
     source,
     identical,
   };
@@ -319,7 +319,7 @@ export function summarizeDiff(d: VersionDiff): DiffSummary {
     else if (e.kind === "changed") lines.push(`Exception ${e.label}: ${e.changes.map((p) => `${p.label} changed`).join("; ") || "citation changed"}`);
   }
   let other = 0;
-  for (const g of [d.applicability, d.submission, d.source]) {
+  for (const g of [d.applicability, d.properties, d.source]) {
     for (const c of g) { other++; lines.push(`${c.label}: ${c.from} → ${c.to}`); }
   }
   return { added, removed, changed, other, lines };

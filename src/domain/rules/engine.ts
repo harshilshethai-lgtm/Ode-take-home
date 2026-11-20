@@ -1,9 +1,10 @@
 // Deterministic rule engine. Consumes structured, sourced facts; never reads notes.
 // No payer-specific branches: every difference between payers is data in the rules snapshot.
 
+import { evaluateProperties } from "./checks";
 import { factRef, humanize } from "./common";
 import { describeCriterion } from "./describe";
-import { getPrimitive } from "./primitives/registry";
+import { incompleteHandlingOf } from "./policyProperties";
 import { resolvePolicyVersion, type Catalog } from "./resolve";
 import type {
   CriterionResult,
@@ -20,7 +21,7 @@ import type {
   RulesSnapshot,
 } from "./types";
 
-export const ENGINE_VERSION = "1.0.0";
+export const ENGINE_VERSION = "2.0.0";
 
 export const SUBMISSION_BLOCKED_MESSAGE =
   "This payer does not allow amending incomplete requests; resolve all items before submitting.";
@@ -39,6 +40,7 @@ export function buildSnapshot(payer: Payer, policy: Policy, version: PolicyVersi
     policyId: policy.id,
     externalPolicyId: policy.externalPolicyId,
     title: policy.title,
+    bodySite: policy.bodySite,
     versionId: version.id,
     versionNumber: version.versionNumber,
     sourceRevisionLabel: version.sourceRevisionLabel,
@@ -46,29 +48,29 @@ export function buildSnapshot(payer: Payer, policy: Policy, version: PolicyVersi
     sourceDocumentHash: version.sourceDocumentHash,
     applicability: structuredClone(version.applicability),
     logic: version.logic,
-    submission: structuredClone(version.submission),
+    properties: structuredClone(version.properties),
     criteria: [...version.criteria]
       .sort((a, b) => a.sortOrder - b.sortOrder)
       .map((c) => ({
         key: c.key,
+        ref: c.ref,
         displayLabel: c.displayLabel,
-        type: c.type,
-        params: structuredClone(c.params),
+        properties: structuredClone(c.properties),
         evaluationMode: c.evaluationMode,
-        sourceCitation: { ...c.sourceCitation },
-        interpretationNote: c.interpretationNote,
-        isAssumption: c.isAssumption,
+        failureType: c.failureType,
+        excerpt: c.excerpt,
+        isAssumption: c.properties.some((p) => !!p.assumption),
         text: describeCriterion(c),
       })),
     exceptions: version.exceptions.map((e) => ({
       key: e.key,
+      ref: e.ref,
       displayLabel: e.displayLabel,
       triggers: [...e.triggers],
       waivesCriterionKeys: [...e.waivesCriterionKeys],
       evaluationMode: e.evaluationMode,
-      sourceCitation: { ...e.sourceCitation },
-      interpretationNote: e.interpretationNote,
-      isAssumption: e.isAssumption,
+      excerpt: e.excerpt,
+      assumption: e.assumption,
     })),
   };
 }
@@ -86,8 +88,8 @@ export function rollupOverall(
   return "approve_ready";
 }
 
-function citationPrefix(s: RulesSnapshot, section: string): string {
-  return `${s.payerName} ${s.externalPolicyId}, v${s.versionNumber}, ${section}`;
+function citationPrefix(s: RulesSnapshot, ref: string): string {
+  return `${s.payerName} ${s.externalPolicyId}, v${s.versionNumber}, ${ref}`;
 }
 
 /** Evaluate against a frozen snapshot. Same snapshot + same input = same outcome. */
@@ -97,11 +99,12 @@ export function evaluateSnapshot(snapshot: RulesSnapshot, input: Omit<Evaluation
     laterality: input.laterality,
     cptCode: input.cptCode,
     planType: input.planType,
+    bodySite: snapshot.bodySite ?? "",
   };
 
   // 1. Exceptions first.
   const exceptionResults: ExceptionResult[] = [];
-  const waivedBy = new Map<string, { key: string; label: string; humanReview: boolean; trigger: string; section: string; refs: ReturnType<typeof factRef>[] }>();
+  const waivedBy = new Map<string, { key: string; label: string; humanReview: boolean; trigger: string; ref: string; refs: ReturnType<typeof factRef>[] }>();
   for (const ex of snapshot.exceptions) {
     const hits = input.facts.filter((f) => f.type === "exception_condition" && typeof f.value === "string" && ex.triggers.includes(f.value));
     const triggered = hits.length > 0;
@@ -114,8 +117,9 @@ export function evaluateSnapshot(snapshot: RulesSnapshot, input: Omit<Evaluation
       triggeredBy,
       evidenceRefs: hits.map(factRef),
       waivesCriterionKeys: ex.waivesCriterionKeys,
-      sourceCitation: ex.sourceCitation,
-      isAssumption: ex.isAssumption,
+      ref: ex.ref,
+      excerpt: ex.excerpt,
+      isAssumption: !!ex.assumption,
     });
     if (triggered) {
       for (const k of ex.waivesCriterionKeys) {
@@ -125,7 +129,7 @@ export function evaluateSnapshot(snapshot: RulesSnapshot, input: Omit<Evaluation
             label: ex.displayLabel,
             humanReview: ex.evaluationMode === "human_review",
             trigger: humanize(triggeredBy[0]),
-            section: ex.sourceCitation.section,
+            ref: ex.ref,
             refs: hits.map(factRef),
           });
         }
@@ -133,13 +137,14 @@ export function evaluateSnapshot(snapshot: RulesSnapshot, input: Omit<Evaluation
     }
   }
 
-  // 2 + 3. Waived criteria are not evaluated; the rest run through their primitive.
+  // 2 + 3. Waived criteria are not evaluated; the rest are checked property by property.
   const criterionResults: CriterionResult[] = snapshot.criteria.map((c) => {
-    const cite = citationPrefix(snapshot, c.sourceCitation.section);
+    const cite = citationPrefix(snapshot, c.ref);
     const base = {
       criterionKey: c.key,
       displayLabel: c.displayLabel,
-      sourceCitation: c.sourceCitation,
+      ref: c.ref,
+      excerpt: c.excerpt,
       ruleText: c.text,
       isAssumption: c.isAssumption,
     };
@@ -149,24 +154,18 @@ export function evaluateSnapshot(snapshot: RulesSnapshot, input: Omit<Evaluation
     const waiver = waivedBy.get(c.key);
     if (waiver) {
       const detail = waiver.humanReview
-        ? `Waived pending clinical confirmation: exception "${waiver.label}" (${waiver.section}) applies because ${waiver.trigger} was documented.`
-        : `Waived: exception "${waiver.label}" (${waiver.section}) applies because ${waiver.trigger} was documented.`;
+        ? `Waived pending clinical confirmation: exception "${waiver.label}" (${waiver.ref}) applies because ${waiver.trigger} was documented.`
+        : `Waived: exception "${waiver.label}" (${waiver.ref}) applies because ${waiver.trigger} was documented.`;
       return { ...base, status: "waived", reason: compose("waived", detail), evidenceRefs: waiver.refs, waivedByExceptionKey: waiver.key };
     }
 
-    const prim = getPrimitive(c.type);
-    const parsed = prim?.paramsSchema.safeParse(c.params);
-    if (!prim || !parsed?.success) {
-      const detail = `This rule could not be evaluated (${prim ? "invalid parameters" : `unknown rule type "${c.type}"`}); a person must review it.`;
-      return { ...base, status: "needs_review", reason: compose("needs_review", detail), evidenceRefs: [] };
-    }
-
-    const r = prim.evaluate(parsed.data, input.facts, ctx);
+    const r = evaluateProperties(c.properties, input.facts, ctx);
+    const results = { evidenceRefs: r.evidenceRefs, propertyResults: r.propertyResults };
     if (c.evaluationMode === "human_review" && r.status === "met") {
       const detail = `${r.detail} This criterion is set to human review, so a person must confirm it.`;
-      return { ...base, status: "needs_review", reason: compose("needs_review", detail), evidenceRefs: r.evidenceRefs };
+      return { ...base, ...results, status: "needs_review", reason: compose("needs_review", detail) };
     }
-    return { ...base, status: r.status, reason: compose(r.status, r.detail), evidenceRefs: r.evidenceRefs };
+    return { ...base, ...results, status: r.status, reason: compose(r.status, r.detail) };
   });
 
   // 4. Overall.
@@ -185,7 +184,7 @@ export function evaluateSnapshot(snapshot: RulesSnapshot, input: Omit<Evaluation
       reason: r.reason,
     }));
   const submissionBlocked =
-    snapshot.submission.incompleteRequestHandling === "deny_resubmit_new" && missingInfoChecklist.length > 0;
+    incompleteHandlingOf(snapshot) === "deny_resubmit_new" && missingInfoChecklist.length > 0;
 
   return {
     overall,

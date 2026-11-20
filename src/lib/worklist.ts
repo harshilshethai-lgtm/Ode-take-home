@@ -2,9 +2,11 @@
 
 import { DEMO_NOW } from "@/data/orders";
 import { deriveFlags, type Flag } from "@/domain/flags";
+import { toOrderStatus } from "@/domain/priorAuth/legacy";
+import { inSavedView, SAVED_VIEWS, type SavedView } from "@/domain/priorAuth/render";
 import { ownerRoleFor, STATUSES, isClosed, type OwnerRole } from "@/domain/statuses";
 import { computeTimeRisk, type TimeRisk } from "@/domain/timeRisk";
-import type { Order, Person } from "@/domain/types";
+import type { Order } from "@/domain/types";
 import { minutesSince } from "./format";
 
 export interface Row {
@@ -49,36 +51,18 @@ export function toRow(order: Order, now: Date = DEMO_NOW): Row {
 }
 
 /** Saved views (tabs). Each one is a filter over rows; counts come from the same predicate. */
-export type ViewId = "mine" | "unassigned" | "slot_at_risk" | "nurse" | "automated" | "closed";
+export type ViewId = SavedView;
 
-export const VIEWS: { id: ViewId; label: string; hint: string }[] = [
-  { id: "mine", label: "Needs me", hint: "Yours, plus unclaimed work for your role" },
-  { id: "unassigned", label: "Unassigned", hint: "A person has to act and nobody has claimed it" },
-  { id: "slot_at_risk", label: "Slot at risk", hint: "The insurer can't answer before the scan" },
-  { id: "nurse", label: "Nurse", hint: "Clinical gaps, rule gaps and denials" },
-  { id: "automated", label: "Automated", hint: "The pipeline has it" },
-  { id: "closed", label: "Closed", hint: "Approved, not required, cancelled" },
-];
+export const VIEWS: { id: ViewId; label: string; hint: string }[] = SAVED_VIEWS;
 
-export function inView(row: Row, view: ViewId, me: { id: string; role: Person["role"] }): boolean {
-  switch (view) {
-    case "mine": {
-      if (!needsPerson(row)) return false;
-      if (row.order.assigneeId === me.id) return true;
-      const myOwnerRoles: OwnerRole[] = me.role === "coordinator" ? ["coordinator"] : ["nurse", "rules_admin"];
-      return row.order.assigneeId === null && myOwnerRoles.includes(row.ownerRole);
-    }
-    case "unassigned":
-      return needsAssignee(row);
-    case "slot_at_risk":
-      return !row.closed && row.risk === "slot_at_risk";
-    case "nurse":
-      return !row.closed && (row.ownerRole === "nurse" || row.ownerRole === "rules_admin");
-    case "automated":
-      return !row.closed && row.ownerRole === "system";
-    case "closed":
-      return row.closed;
-  }
+export function inView(row: Row, view: ViewId, now: Date = DEMO_NOW): boolean {
+  return inSavedView({
+    status: toOrderStatus(row.order.status),
+    channel: row.order.channel,
+    statusSince: new Date(row.order.statusSince),
+    view,
+    now,
+  });
 }
 
 /** True when a human has to act and nobody has claimed it yet. */

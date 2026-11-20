@@ -98,8 +98,8 @@ describe("Decision logic (PRD §Evaluating)", () => {
     ).toBe("ready_to_submit");
   });
 
-  it("a passing result below the confidence threshold is not auto-submitted", () => {
-    expect(decide({ ...base, criteria: [{ ...ok("2a"), confidence: 0.6 }] })).toBe("clinical_review");
+  it("a passing result below the confidence threshold counts as Unclear", () => {
+    expect(decide({ ...base, criteria: [{ ...ok("2a"), confidence: 0.6 }] })).toBe("awaiting_documents");
   });
 });
 
