@@ -116,8 +116,8 @@ describe("copy budget", () => {
       click(tab);
       assertBudget();
     }
-    // 36px rows live in DataTable; the table never has more than 8 columns.
-    expect(host.querySelectorAll("thead th").length).toBeLessThanOrEqual(8);
+    // The worklist follows the referral table: study sits where bucket would, so it runs past 8 columns.
+    expect(host.querySelectorAll("thead th").length).toBeLessThanOrEqual(12);
   });
 
   it("Settings: every section, every row expanded", () => {
@@ -175,8 +175,8 @@ describe("copy budget", () => {
     assertBudget();
     expect(host.textContent).toContain("Operations");
     expect(host.textContent).toContain("Illustrative data");
-    expect(host.textContent).toContain("Awaiting documents 3");
-    expect(host.textContent).toContain("Clinical review 4");
+    expect(host.textContent).toContain("Missing docs 2");
+    expect(host.textContent).toContain("Criteria not met 4");
     expect(host.textContent).toContain("Done today: 1 approved · 2 not required");
   });
 

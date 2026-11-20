@@ -2,16 +2,15 @@ import type { StatusTone } from "@/components/ui/status-dot";
 import { STATUSES, type StatusId } from "@/domain/statuses";
 
 /**
- * Worklist status -> dot color. Color means status:
- * green ready/approved, amber waiting on documents or a correction, red blocked/denied/unreadable,
- * violet with a nurse, gray for everything automated or closed.
+ * Worklist status -> dot color.
+ * Green for a closed approval, amber for admin review, violet for a nurse, red for a denial.
  */
 const OVERRIDE: Partial<Record<StatusId, StatusTone>> = {
-  ready_to_submit: "ready",
   approved: "ready",
-  unreadable: "blocked",
+  not_required: "ready",
   denied: "blocked",
-  closed_denied: "blocked",
+  needs_admin_review: "hold",
+  needs_clinical_review: "review",
 };
 
 export function statusTone(status: StatusId): StatusTone {

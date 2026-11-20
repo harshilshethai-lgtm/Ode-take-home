@@ -8,6 +8,7 @@ import { INSURER_TURNAROUND_HOURS, hoursUntil, type TimeRisk } from "./timeRisk"
 export type FlagId =
   | "safety"
   | "slot_at_risk"
+  | "scan_at_risk"
   | "urgent"
   | "rule_violation"
   | "coverage"
@@ -40,6 +41,11 @@ export const FLAG_DEFS: Record<FlagId, { label: string; meaning: string; tone: F
   slot_at_risk: {
     label: "Scan slot at risk",
     meaning: "The insurer can't be expected to answer before the scan, or the scan is within 24 hours.",
+    tone: "danger",
+  },
+  scan_at_risk: {
+    label: "Scan at risk",
+    meaning: "No decision, and the scan is inside 24 business hours.",
     tone: "danger",
   },
   urgent: {
@@ -78,6 +84,7 @@ export const FLAG_DEFS: Record<FlagId, { label: string; meaning: string; tone: F
 export const FLAG_ORDER: FlagId[] = [
   "safety",
   "slot_at_risk",
+  "scan_at_risk",
   "urgent",
   "rule_violation",
   "coverage",
@@ -95,14 +102,20 @@ export function deriveFlags(args: {
   scanAt: Date | null;
   insurer: string | null;
   now: Date;
+  /** Submitted, with no decision, inside 24 business hours of the scan. */
+  scanDecisionRisk?: boolean;
 }): Flag[] {
-  const { findings, risk, priority, closed, overSla, scanAt, insurer, now } = args;
+  const { findings, risk, priority, closed, overSla, scanAt, insurer, now, scanDecisionRisk } = args;
   const out: Flag[] = findings.map((f) => ({ id: f.type, detail: f.detail }));
 
   if (closed) return sortFlags(out);
 
   if (priority === "Urgent") {
     out.push({ id: "urgent", detail: "Urgent order. Send with the insurer's urgent flag." });
+  }
+
+  if (scanDecisionRisk) {
+    out.push({ id: "scan_at_risk", detail: "No decision and the scan is inside 24 business hours. Ask scheduling to hold or move it." });
   }
 
   if (scanAt && (risk === "slot_at_risk" || risk === "at_risk")) {
@@ -125,9 +138,12 @@ export function deriveFlags(args: {
   }
 
   if (overSla) {
+    const stuckPipeline = overSla.slaHours < 1;
     out.push({
       id: "over_sla",
-      detail: `${overSla.statusLabel} for ${fmtDuration(overSla.minutes)}. SLA for this status is ${overSla.slaHours}h.`,
+      detail: stuckPipeline
+        ? `Processing for ${fmtDuration(overSla.minutes)}. A stuck pipeline is a bug. Alert the ops lead.`
+        : `${overSla.statusLabel} for ${fmtDuration(overSla.minutes)}. SLA for this status is ${overSla.slaHours}h.`,
     });
   }
 

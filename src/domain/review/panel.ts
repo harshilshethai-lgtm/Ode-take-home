@@ -4,16 +4,16 @@ import { buildSeedDb } from "@/data/rules/seed";
 import { SEED_ORDERS, DEMO_NOW } from "@/data/orders";
 import { buildCaseRecord } from "@/domain/caseRecord";
 import { actionsFor, statusLabel, type StatusAction } from "@/domain/priorAuth/actions";
-import { correctionDestination, ownerRole } from "@/domain/priorAuth/catalog";
+import { ownerRole } from "@/domain/priorAuth/catalog";
 import { toOrderStatus } from "@/domain/priorAuth/legacy";
-import type { OrderStatus, UserRole } from "@/domain/priorAuth/types";
+import type { OrderStatus, ReasonCode, UserRole } from "@/domain/priorAuth/types";
 import { incompleteHandlingOf } from "@/domain/rules/policyProperties";
 import type { PolicyVersion } from "@/domain/rules/types";
 import { computeTimeRisk, fixByAt } from "@/domain/timeRisk";
 import type { Order } from "@/domain/types";
 import type { CheckResult, CheckRow, ReviewPanel } from "./types";
 
-const BEFORE_COVERAGE = new Set<OrderStatus>(["RECEIVED", "PRE_PROCESSING", "UNREADABLE", "MATCHING", "UNMATCHED"]);
+const BEFORE_COVERAGE = new Set<ReasonCode>(["UNREADABLE_DOCUMENT", "NO_MATCH", "WRONG_PATIENT_PAGE"]);
 
 const CONSISTENCY: Array<{ id: string; label: string }> = [
   { id: "CO-1", label: "Same side throughout" },
@@ -33,7 +33,7 @@ const weekday = new Intl.DateTimeFormat("en-US", { weekday: "short" });
 type Fact = { result: CheckResult; found: string; page?: number; quote?: string };
 
 interface CaseFacts {
-  headline: string;
+  headline?: string;
   assumption?: string;
   /** When set, these results replace a zip against the packet. Missing keys stay Unclear. */
   criteria?: Record<string, Fact>;
@@ -223,6 +223,11 @@ const FACTS: Record<string, CaseFacts> = {
     hideChecks: true,
     receivedKind: "record",
   },
+  "case-18-sisko": {
+    receivedKind: "record",
+    receivedAt: "2026-11-10T12:15:00",
+    evaluatedAt: "2026-11-10T12:40:00",
+  },
   "case-20-odo": {
     headline: "Couldn't read this fax: all 4 pages blank",
     hideChecks: true,
@@ -246,9 +251,10 @@ function seedDb() {
   return seeded;
 }
 
-export function isPastCoverage(status: OrderStatus, blockingChecks: readonly string[]): boolean {
-  if (BEFORE_COVERAGE.has(status)) return false;
-  if (status === "NEEDS_CORRECTION" && blockingChecks.length > 0 && blockingChecks.every((id) => id.startsWith("MA-"))) return false;
+export function isPastCoverage(status: OrderStatus, blockingChecks: readonly string[], reason: ReasonCode | null = null): boolean {
+  if (status === "PROCESSING") return false;
+  if (reason && BEFORE_COVERAGE.has(reason)) return false;
+  if (blockingChecks.length > 0 && blockingChecks.every((id) => id.startsWith("MA-"))) return false;
   return true;
 }
 
@@ -326,7 +332,10 @@ function sentenceFor(action: StatusAction, primary: string | undefined, index: n
     case "resend_request":
       return "Request the missing records again";
     case "request_resend":
+    case "request_clean_copy":
       return "Request a readable copy from the sender";
+    case "request_patient_record":
+      return "Request this patient's own record";
     case "notify_ordering_doctor":
       return "Notify the ordering doctor about the conflict";
     case "correction_made":
@@ -346,10 +355,7 @@ function sentenceFor(action: StatusAction, primary: string | undefined, index: n
   }
 }
 
-function toAction(action: StatusAction, order: Order): NonNullable<ReviewPanel["toResolve"][number]["action"]> {
-  if (action.id === "correction_made") {
-    return { label: action.label, transition: correctionDestination(order.blockingChecks ?? []) };
-  }
+function toAction(action: StatusAction, _order: Order): NonNullable<ReviewPanel["toResolve"][number]["action"]> {
   if (action.to) return { label: action.label, transition: action.to };
   return { label: action.label, sideEffect: action.id };
 }
@@ -386,6 +392,20 @@ const KEY_BY_PACKET_ID: Record<string, string> = {
   "2d": "no_recent_mri",
 };
 
+/** An X-ray written in the note is a result. "Not checked" is only for a criterion that never ran. */
+function xrayFromNote(order: Order): Fact | null {
+  const record = buildCaseRecord(order);
+  const row = record.extracted.find((item) => /x-?ray|\bXR\b/i.test(`${item.label} ${item.section} ${item.excerpt} ${item.cite.quote}`));
+  if (!row) return null;
+  if (/\bno\b[^.]{0,40}x-?ray|not (?:mention|on|in)|without an x-?ray/i.test(row.excerpt)) return null;
+  return {
+    result: "MET",
+    found: row.excerpt.replace(/\.$/, ""),
+    page: row.cite.page,
+    quote: row.cite.quote.split(/\s+/).slice(0, 11).join(" "),
+  };
+}
+
 function packetFacts(order: Order): Record<string, Fact> {
   const record = buildCaseRecord(order);
   const rows = record.criteria.filter((c) => !NOT_A_CRITERION.has(c.line));
@@ -399,7 +419,8 @@ function packetFacts(order: Order): Record<string, Fact> {
   for (const criterion of version.criteria) {
     const source = byKey.get(criterion.key);
     if (!source) {
-      out[criterion.key] = { result: "UNCLEAR", found: "Not checked: this version has no result" };
+      const recovered = criterion.key === "prior_xray" ? xrayFromNote(order) : null;
+      out[criterion.key] = recovered ?? { result: "UNCLEAR", found: "Not checked: this version has no result" };
       continue;
     }
     const result: CheckResult = source.status === "met" ? "MET" : source.status === "not_met" ? "NOT_MET" : source.status === "waived" ? "WAIVED" : "UNCLEAR";
@@ -416,7 +437,7 @@ function packetFacts(order: Order): Record<string, Fact> {
 function consistencyRows(order: Order, facts: CaseFacts | undefined): CheckRow[] {
   if (facts?.hideChecks) return [];
   const status = toOrderStatus(order.status);
-  if (status === "NOT_REQUIRED" || status === "UNREADABLE" || status === "UNMATCHED" || status === "RULE_GAP") return [];
+  if (status === "NOT_REQUIRED" || order.reasonCode === "UNREADABLE_DOCUMENT" || order.reasonCode === "NO_MATCH" || order.reasonCode === "RULE_GAP") return [];
   if (status === "APPROVED" && order.linkedApproval) return [];
   const blocking = new Set(order.blockingChecks ?? []);
   return CONSISTENCY.map((check) => {
@@ -431,7 +452,7 @@ function consistencyRows(order: Order, facts: CaseFacts | undefined): CheckRow[]
 function criteriaRows(order: Order, facts: CaseFacts | undefined, version: PolicyVersion | null): CheckRow[] {
   if (facts?.hideChecks || !version) return [];
   const status = toOrderStatus(order.status);
-  if (status === "NOT_REQUIRED" || status === "UNREADABLE" || status === "UNMATCHED" || status === "RULE_GAP") return [];
+  if (status === "NOT_REQUIRED" || order.reasonCode === "UNREADABLE_DOCUMENT" || order.reasonCode === "NO_MATCH" || order.reasonCode === "RULE_GAP") return [];
   if (status === "APPROVED" && order.linkedApproval) return [];
   const overlay = facts?.criteria ?? packetFacts(order);
   const rows = version.criteria.map((criterion) => {
@@ -464,45 +485,35 @@ function headlineFor(order: Order, facts: CaseFacts | undefined, passing: number
   const status = toOrderStatus(order.status);
   const via = order.channel === "portal" ? "portal" : "API";
   const policy = policyIdOf(order.policyRef);
-  switch (status) {
-    case "READY_TO_SUBMIT":
-      if (total > 0 && passing === total) return `Meets all ${total} criteria; ready to send via ${via}`;
-      return `Approved for submission; ready to send via ${via}`;
-    case "SUBMITTED":
-      return `With ${order.insurer ?? "the insurer"} since ${order.statusSince.slice(0, 10)}`;
-    case "AWAITING_DOCUMENTS":
-      return order.reason.endsWith(".") ? order.reason.slice(0, -1) : order.reason;
-    case "NEEDS_CORRECTION":
-      if ((order.blockingChecks ?? []).includes("CO-1")) return "Request says one side; the records say the other";
-      if ((order.blockingChecks ?? []).includes("MA-3")) return "A page belongs to another patient; removed from the packet";
-      if ((order.blockingChecks ?? []).includes("CV-1") || (order.blockingChecks ?? []).includes("CO-5")) {
-        return "Insurer on the order doesn't match the patient's current card";
-      }
-      return order.reason;
-    case "CLINICAL_REVIEW":
-      if (order.confirmOnly) return `Confirm before sending: ${order.reason}`;
-      return firstFail && policy ? `Doesn't meet ${policy}: ${firstFail}` : order.reason;
-    case "RULE_GAP":
-      return `${order.insurer ?? "The insurer"} requires approval, but there are no rules for ${order.study}`;
-    case "NOT_REQUIRED":
-      return `No approval needed: ${order.reason.replace(/\.$/, "")}`;
-    case "APPROVED":
-      return order.linkedApproval ? `${order.reason}, linked from an earlier order` : order.reason;
-    case "DENIED":
-      return `Denied: ${order.reason}`;
-    case "UNREADABLE":
-      return `Couldn't read this fax: ${order.reason.replace(/\.$/, "")}`;
-    case "UNMATCHED":
-      return "Couldn't match to a patient or order";
-    default:
-      return order.reason;
+  const reason = order.reasonCode;
+  if (reason === "PORTAL_UPLOAD") {
+    if (total > 0 && passing === total) return `Meets all ${total} criteria; upload via ${via}`;
+    return `Approved for submission; upload via ${via}`;
   }
+  if (reason === "INITIAL_REQUEST" || reason === "APPEAL" || status === "SUBMITTED") {
+    return `With ${order.insurer ?? "the insurer"} since ${order.statusSince.slice(0, 10)}`;
+  }
+  if (reason === "MISSING_DOCUMENTS" || reason === "MORE_INFO_REQUESTED") return order.reason.endsWith(".") ? order.reason.slice(0, -1) : order.reason;
+  if (reason === "SIDE_MISMATCH") return "Request says one side; the records say the other";
+  if (reason === "WRONG_PATIENT_PAGE") return "A page belongs to another patient; removed from the packet";
+  if (reason === "INSURER_MISMATCH") return "Insurer on the order doesn't match the patient's current card";
+  if (reason === "CRITERIA_NOT_MET" || reason === "CONFIRM_AFTER_FIX" || reason === "REPEATED_REQUESTS") {
+    if (reason === "CONFIRM_AFTER_FIX") return `Confirm before sending: ${order.reason}`;
+    return firstFail && policy ? `Doesn't meet ${policy}: ${firstFail}` : order.reason;
+  }
+  if (reason === "RULE_GAP") return `${order.insurer ?? "The insurer"} requires approval, but there are no rules for ${order.study}`;
+  if (status === "NOT_REQUIRED") return `No approval needed: ${order.reason.replace(/\.$/, "")}`;
+  if (status === "APPROVED") return order.linkedApproval ? `${order.reason}, linked from an earlier order` : order.reason;
+  if (status === "DENIED") return `Denied: ${order.reason}`;
+  if (reason === "UNREADABLE_DOCUMENT") return `Couldn't read this fax: ${order.reason.replace(/\.$/, "")}`;
+  if (reason === "NO_MATCH") return "Couldn't match to a patient or order";
+  return order.reason;
 }
 
 function coverageRows(order: Order): CheckRow[] {
   const status = toOrderStatus(order.status);
   const blocking = order.blockingChecks ?? [];
-  if (!isPastCoverage(status, blocking)) return [];
+  if (!isPastCoverage(status, blocking, order.reasonCode)) return [];
   const eligibilityFailed = blocking.includes("CV-1") || blocking.includes("CO-5");
   const rows: CheckRow[] = [
     eligibilityFailed
@@ -517,8 +528,8 @@ function coverageRows(order: Order): CheckRow[] {
   return rows;
 }
 
-export function ensureCoverage(status: OrderStatus, blockingChecks: readonly string[], rows: CheckRow[], orderId: string): CheckRow[] {
-  if (!isPastCoverage(status, blockingChecks)) return rows;
+export function ensureCoverage(status: OrderStatus, blockingChecks: readonly string[], rows: CheckRow[], orderId: string, reason: ReasonCode | null = null): CheckRow[] {
+  if (!isPastCoverage(status, blockingChecks, reason)) return rows;
   if (rows.length > 0) return rows;
   console.error(`Coverage checks did not run for ${orderId}`);
   return [{ id: "CV-1", result: "NOT_MET", label: "Eligibility", found: "Not run: pipeline error" }];
@@ -531,7 +542,7 @@ function documentNotes(facts: CaseFacts | undefined): CheckRow[] {
 function documentsFor(order: Order, facts: CaseFacts | undefined): ReviewPanel["documents"] {
   const record = buildCaseRecord(order);
   const title = record.documents[0]?.title ?? "Packet";
-  const status = toOrderStatus(order.status) === "UNREADABLE" ? "UNREADABLE" : "ATTACHED";
+  const status = order.reasonCode === "UNREADABLE_DOCUMENT" ? "UNREADABLE" : "ATTACHED";
   const pages = Math.max(order.attachmentCount, 1);
   return [{ id: "packet", type: title, status, pages }, ...(facts?.extraDocuments ?? [])];
 }
@@ -560,11 +571,11 @@ function evidenceFor(facts: CaseFacts | undefined, consistency: CheckRow[], crit
 function activityFor(order: Order, evaluatedAt: string | undefined, receivedAt: string | undefined): ReviewPanel["activity"] {
   const status = toOrderStatus(order.status);
   const rows: ReviewPanel["activity"] = [];
-  if (evaluatedAt && status !== "EVALUATING") {
+  if (evaluatedAt && status !== "PROCESSING") {
     rows.push({
       at: evaluatedAt,
       actor: "System",
-      from: statusLabel("EVALUATING"),
+      from: statusLabel("PROCESSING"),
       to: statusLabel(status),
       reason: order.reason,
     });
@@ -573,8 +584,8 @@ function activityFor(order: Order, evaluatedAt: string | undefined, receivedAt: 
     rows.push({
       at: receivedAt,
       actor: "System",
-      from: statusLabel("RECEIVED"),
-      to: statusLabel("PRE_PROCESSING"),
+      from: statusLabel("PROCESSING"),
+      to: statusLabel("PROCESSING"),
       reason: "Packet received",
     });
   }
@@ -582,7 +593,7 @@ function activityFor(order: Order, evaluatedAt: string | undefined, receivedAt: 
     rows.push({
       at: order.statusSince,
       actor: "System",
-      from: statusLabel("RECEIVED"),
+      from: statusLabel("PROCESSING"),
       to: statusLabel(status),
       reason: order.reason,
     });
@@ -590,26 +601,34 @@ function activityFor(order: Order, evaluatedAt: string | undefined, receivedAt: 
   return rows.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0));
 }
 
+function snapshotOf(order: Order, fixableGaps: boolean) {
+  return {
+    id: order.id,
+    status: toOrderStatus(order.status),
+    statusVersion: 1,
+    channel: order.channel,
+    reason: order.reasonCode,
+    step: order.step,
+    detail: order.detail,
+    otherIssues: order.otherIssues,
+    missingDocumentsEntries: 0,
+    resumeStep: null,
+    submissionAttempts: 0,
+    confirmOnly: order.reasonCode === "CONFIRM_AFTER_FIX",
+    linkedApproval: order.linkedApproval === true,
+    approval: null,
+    blockingChecks: order.blockingChecks ?? [],
+    fixableGaps,
+    scanCompleted: false,
+    createdAt: order.statusSince,
+  };
+}
+
 function nextStep(order: Order, status: OrderStatus): string {
   const owner = ownerRole(status, order.channel);
   const fallback = order.reason.endsWith(".") ? order.reason.slice(0, -1) : order.reason;
   if (owner !== "coordinator" && owner !== "nurse") return fallback;
-  const actions = actionsFor(
-    {
-      id: order.id,
-      status,
-      statusVersion: 1,
-      channel: order.channel,
-      blockingChecks: order.blockingChecks ?? [],
-      fixableGaps: false,
-      awaitingDocumentsEntries: 0,
-      confirmOnly: order.confirmOnly === true,
-      linkedApproval: order.linkedApproval === true,
-      approval: null,
-      createdAt: order.statusSince,
-    },
-    owner,
-  );
+  const actions = actionsFor(snapshotOf(order, false), owner);
   return actions[0] ? sentenceFor(actions[0], undefined, 0) : fallback;
 }
 
@@ -623,20 +642,8 @@ function resolveItems(order: Order, role: UserRole, facts: CaseFacts | undefined
   if (!viewerOwns(role, status, order.channel)) {
     return [{ text: text ?? nextStep(order, status), owner, contact, readOnly: true }];
   }
-  const snapshot = {
-    id: order.id,
-    status,
-    statusVersion: 1,
-    channel: order.channel,
-    blockingChecks: order.blockingChecks ?? [],
-    fixableGaps: status === "CLINICAL_REVIEW" && (facts?.criteria ? Object.values(facts.criteria).some((f) => f.result === "UNCLEAR") : false),
-    awaitingDocumentsEntries: 0,
-    confirmOnly: order.confirmOnly === true,
-    linkedApproval: order.linkedApproval === true,
-    approval: null,
-    createdAt: order.statusSince,
-  };
-  const actions = actionsFor(snapshot, role);
+  const fixable = facts?.criteria ? Object.values(facts.criteria).some((f) => f.result === "UNCLEAR") : false;
+  const actions = actionsFor(snapshotOf(order, fixable), role);
   if (actions.length === 0) return [{ text: text ?? nextStep(order, status), owner, contact, readOnly: false }];
   return actions.map((action, index) => ({
     text: sentenceFor(action, text, index),
@@ -673,7 +680,7 @@ export function getReviewPanel(orderId: string, viewerRole: UserRole, source?: O
   const deadline = scanAt && risk !== "none" ? fixByAt(scanAt, order.insurer) : null;
   const constraint = version && incompleteHandlingOf(version) === "deny_resubmit_new" ? "Denied requests can't be amended" : undefined;
 
-  const coverage = ensureCoverage(status, order.blockingChecks ?? [], coverageRows(order), order.id);
+  const coverage = ensureCoverage(status, order.blockingChecks ?? [], coverageRows(order), order.id, order.reasonCode);
 
   return {
     status,

@@ -1,28 +1,76 @@
-// Prior-auth status model. No UI imports. Enum values match the worklist spec exactly.
+// Prior-auth status model. Eight statuses, plus a reason code on every order that is not mid-pipeline.
+// No UI imports.
 
 export type OrderStatus =
-  | "RECEIVED"
-  | "PRE_PROCESSING"
-  | "UNREADABLE"
-  | "MATCHING"
-  | "UNMATCHED"
-  | "COVERAGE_CHECK"
-  | "APPROVAL_CHECK"
-  | "COLLECTING_EVIDENCE"
-  | "AWAITING_DOCUMENTS"
-  | "NEEDS_CORRECTION"
-  | "EVALUATING"
-  | "CLINICAL_REVIEW"
-  | "RULE_GAP"
-  | "READY_TO_SUBMIT"
+  | "PROCESSING"
+  | "NEEDS_ADMIN_REVIEW"
+  | "NEEDS_CLINICAL_REVIEW"
   | "SUBMITTED"
-  | "MORE_INFO_REQUESTED"
-  | "DENIED"
-  | "APPEAL"
   | "APPROVED"
   | "NOT_REQUIRED"
-  | "CLOSED_DENIED"
+  | "DENIED"
   | "CANCELLED";
+
+/** Progress inside PROCESSING. Never a status and never a worklist filter. */
+export type ProcessingStep =
+  | "INTAKE"
+  | "PAGE_CHECKS"
+  | "MATCHING"
+  | "COVERAGE"
+  | "RULES"
+  | "EVIDENCE"
+  | "EVALUATING"
+  | "SUBMITTING";
+
+export type AdminReason =
+  | "UNREADABLE_DOCUMENT"
+  | "NO_MATCH"
+  | "MISSING_DOCUMENTS"
+  | "SIDE_MISMATCH"
+  | "WRONG_PATIENT_PAGE"
+  | "INSURER_MISMATCH"
+  | "CPT_MISMATCH"
+  | "PORTAL_UPLOAD"
+  | "SUBMISSION_FAILED"
+  | "MORE_INFO_REQUESTED"
+  | "STATUS_CHECK_FAILED"
+  | "APPROVAL_MISMATCH"
+  | "WRITEBACK_FAILED";
+
+export type ClinicalReason =
+  | "CRITERIA_NOT_MET"
+  | "RULE_GAP"
+  | "CONFIRM_AFTER_FIX"
+  | "REPEATED_REQUESTS"
+  | "DENIED_DECIDE_APPEAL"
+  | "PEER_TO_PEER";
+
+export type SubmittedReason = "INITIAL_REQUEST" | "AWAITING_DECISION" | "PENDED_BY_INSURER" | "APPEAL";
+
+export type ApprovedReason = "NEW" | "LINKED_EXISTING" | "APPEAL_WON";
+
+export type NotRequiredReason = "NOT_ON_PA_LIST" | "SETTING_EXEMPT";
+
+export type DeniedReason = "NO_APPEAL" | "APPEAL_LOST";
+
+export type CancelledReason = "EPIC_CANCELLED" | "WITHDRAWN_BY_NURSE" | "WITHDRAWN_BY_COORDINATOR" | "SLOT_RELEASED";
+
+export type ReasonCode =
+  | AdminReason
+  | ClinicalReason
+  | SubmittedReason
+  | ApprovedReason
+  | NotRequiredReason
+  | DeniedReason
+  | CancelledReason;
+
+/** Structured facts a reason template fills. Never a free-text substitute for the reason code. */
+export type ReasonDetail = Record<string, string | number | null>;
+
+export interface OtherIssue {
+  code: ReasonCode;
+  detail: ReasonDetail;
+}
 
 export type DocumentStatus =
   | "RECEIVED"
@@ -53,17 +101,6 @@ export type CheckId =
   | "CO-5";
 
 export type ConsistencyCheckId = "CO-1" | "CO-2" | "CO-3" | "CO-4" | "CO-5";
-
-export type PageType =
-  | "cover"
-  | "request_form"
-  | "office_note"
-  | "pt_note"
-  | "imaging_report"
-  | "pathology"
-  | "insurance_card"
-  | "handwritten_note"
-  | "other";
 
 export type CriterionResultCode = "MET" | "WAIVED" | "EXCEPTION_MET" | "NOT_MET" | "UNCLEAR";
 
@@ -100,9 +137,9 @@ export interface CriterionResult {
 
 export type Channel = "api" | "portal";
 
-export type DisplayGroup = "system" | "coordinator" | "nurse" | "insurer" | "closed";
+export type DisplayGroup = "automated" | "coordinator" | "nurse" | "insurer" | "closed";
 
-export type PillTone = "system" | "coordinator" | "nurse" | "approved" | "denied" | "cancelled";
+export type PillTone = "processing" | "admin" | "clinical" | "submitted" | "approved" | "denied" | "cancelled";
 
 export type OwnerRole = "system" | "coordinator" | "nurse";
 
@@ -136,9 +173,16 @@ export interface ApprovalInput {
   cpt: string;
   validFrom: string;
   validTo: string;
-  /** True when CV-2 linked an approval already on file. */
+  /** True when an approval already on file is linked and nothing is submitted. */
   linked?: boolean;
+  side?: string | null;
+  units?: number;
+  facility?: string | null;
+  provider?: string | null;
 }
+
+/** Epic events that reopen an approval before the scan. The system is the only actor. */
+export type EpicReapprovalEvent = "scan_outside_approval" | "cpt_side_or_facility_changed" | "insurer_changed";
 
 export type Actor =
   | { kind: "system" }
@@ -149,12 +193,26 @@ export interface OrderSnapshot {
   status: OrderStatus;
   statusVersion: number;
   channel: Channel | null;
-  blockingChecks: string[];
-  fixableGaps: boolean;
-  awaitingDocumentsEntries: number;
+  /** Null only while PROCESSING, which carries a step instead. */
+  reason: ReasonCode | null;
+  step: ProcessingStep | null;
+  detail: ReasonDetail;
+  otherIssues: OtherIssue[];
+  /** How many times this order has entered MISSING_DOCUMENTS. */
+  missingDocumentsEntries: number;
+  /** Where a return to PROCESSING should resume. */
+  resumeStep: ProcessingStep | null;
+  submissionAttempts: number;
+  /** True when the reason is CONFIRM_AFTER_FIX. */
   confirmOnly: boolean;
   linkedApproval: boolean;
   approval: ApprovalInput | null;
+  /** Checks that explain an admin correction. Derived from the reason. */
+  blockingChecks: string[];
+  /** A nurse can send the order back because a document would still help. */
+  fixableGaps: boolean;
+  /** Epic has reported the scan as completed. Re-approval is then refused. */
+  scanCompleted: boolean;
   createdAt: string;
 }
 
@@ -172,12 +230,15 @@ export interface AuditRow {
   id: string;
   orderId: string | null;
   documentId: string | null;
+  /** Current status, or a legacy status kept so history stays readable. */
   fromStatus: string;
   toStatus: string;
   /** "system" or a user id. */
   actor: string;
   at: string;
   reason: string;
+  reasonCode: string | null;
+  step: ProcessingStep | null;
   checkIds: string[];
   criterionResults: CriterionResult[] | null;
   evidenceRefs: EvidenceRef[];
@@ -190,21 +251,25 @@ export type Effect =
   | { type: "follow_up_timer"; orderId: string; rerequestHours: number; phoneHours: number }
   | { type: "privacy_report"; documentId: string; orderId: string | null }
   | { type: "rules_admin_task"; orderId: string; detail: string }
-  | { type: "denial_backlog"; orderId: string; reason: string }
   | { type: "scheduling_notified"; orderId: string }
   | { type: "release_slot"; orderId: string }
-  | { type: "epic_in_basket"; orderId: string }
   | { type: "write_epic_approval"; orderId: string; approval: ApprovalInput }
   | { type: "epic_not_required"; orderId: string; policyId: string | null }
   | { type: "resend_request"; orderId: string }
   | { type: "notify_ordering_doctor"; orderId: string }
   | { type: "message_ordering_doctor"; orderId: string }
-  | { type: "open_packet"; orderId: string };
+  | { type: "open_packet"; orderId: string }
+  | { type: "ops_lead_alert"; orderId: string; detail: string };
 
 export interface TransitionContext {
   actor: Actor;
   expectedVersion: number;
-  reason: string;
+  /** Destination reason. Null when the destination is PROCESSING. */
+  reason: ReasonCode | null;
+  detail?: ReasonDetail;
+  otherIssues?: OtherIssue[];
+  /** Required when entering PROCESSING. */
+  step?: ProcessingStep | null;
   checkIds?: string[];
   criterionResults?: CriterionResult[] | null;
   evidenceRefs?: EvidenceRef[];
@@ -212,19 +277,22 @@ export interface TransitionContext {
   routingPolicyVersion?: string | null;
   note?: string;
   portalReference?: string;
-  trackingNumber?: string;
   approval?: ApprovalInput | null;
-  denialReason?: string;
   /** System may cancel only when Epic reports the order cancelled. */
   epicCancelled?: boolean;
-  trigger?: "document_attached" | "resend_received" | "loop_guard";
-  /** Coordinators cannot edit criterion results. Snapshots on the audit row are not edits. */
+  trigger?: "document_attached" | "send_for_documents" | "approve_for_submission";
+  /** Coordinators cannot edit criterion results. */
   mutateCriteria?: boolean;
-  confirmOnly?: boolean;
   policyId?: string | null;
   now?: Date;
   /** Default 24h re-request, 48h phone call. */
   followUp?: { rerequestHours: number; phoneHours: number };
+  fixableGaps?: boolean;
+  /** Set only for APPROVED → PROCESSING. */
+  epicEvent?: EpicReapprovalEvent;
+  /** The Epic write was read back, or a person entered the Epic auth id. */
+  writeBackConfirmed?: boolean;
+  epicAuthId?: string;
 }
 
 export class IllegalTransitionError extends Error {

@@ -30,7 +30,7 @@ export function Tabs<T extends string>({
             onClick={() => onChange(t.id)}
             className={cn(
               "-mb-px h-8 whitespace-nowrap border-b-2 text-body transition-colors",
-              active ? "border-accent font-medium text-fg" : "border-transparent text-fg-2 hover:text-fg",
+              active ? "border-accent font-medium text-accent-fg" : "border-transparent text-fg-2 hover:text-fg",
             )}
           >
             {t.label}

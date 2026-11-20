@@ -101,9 +101,8 @@ describe("review panel interactions", () => {
     render(
       <ReviewPanelView panel={panel} order={order} role="coordinator" actorId="p-jasmine" onOpen={() => {}} onApplied={() => {}} />,
     );
-    const evidence = host.querySelector('[data-review="Evidence"]')!;
-    expect(evidence.textContent).toContain("All evidence linked on each check");
-    expect(evidence.querySelector("button")?.getAttribute("aria-expanded")).toBe("false");
+    expect(host.querySelector('[data-review="Evidence"]')).toBeNull();
+    expect(host.textContent).not.toContain("All evidence linked on each check");
   });
 
   it("is read-only for a role that does not own the status", () => {

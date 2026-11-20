@@ -10,6 +10,8 @@ export interface Column<T> {
   align?: "left" | "right";
   /** Width class on the header cell, e.g. "w-24". */
   width?: string;
+  /** Allow the cell to wrap. Comfortable tables use this for a name over a caption. */
+  wrap?: boolean;
   cell: (row: T) => ReactNode;
 }
 
@@ -22,29 +24,46 @@ interface Props<T> {
   rowClassName?: (row: T) => string | undefined;
   loading?: boolean;
   empty?: ReactNode;
+  /** Two-line cells (name over a caption). Header sits on the app surface. */
+  comfortable?: boolean;
+  className?: string;
 }
 
-const MAX_COLUMNS = 8;
+const MAX_COLUMNS = 12;
 
 /**
- * 36px rows, hairline dividers, no zebra, no vertical borders, hover bg-hover.
- * Selected row: 2px accent left border plus bg-hover. At most 8 columns.
+ * Hairline dividers, no zebra, no vertical borders, hover bg-hover.
+ * Compact rows are 36px. Comfortable rows fit a name and a caption.
+ * Selected row: 2px accent left border plus bg-hover. At most 12 columns.
  */
-export function DataTable<T>({ columns, rows, getKey, selectedKey, onRowClick, rowClassName, loading, empty }: Props<T>) {
+export function DataTable<T>({
+  columns,
+  rows,
+  getKey,
+  selectedKey,
+  onRowClick,
+  rowClassName,
+  loading,
+  empty,
+  comfortable = false,
+  className,
+}: Props<T>) {
   if (columns.length > MAX_COLUMNS) {
     throw new Error(`DataTable allows at most ${MAX_COLUMNS} columns (got ${columns.length}).`);
   }
   return (
-    <table className="w-full text-left text-body">
+    <table className={cn("w-full text-left text-body", comfortable && "group/table", className)}>
       <thead>
         <tr className="border-b border-line">
           {columns.map((c, i) => (
             <th
               key={c.id}
               scope="col"
-                className={cn(
-                "sticky top-0 z-10 h-8 whitespace-nowrap border-l-2 border-transparent bg-panel px-3 text-caption font-normal text-fg-2",
-                i === 0 && "pl-4",
+              className={cn(
+                "sticky top-0 z-10 whitespace-nowrap border-l-2 border-transparent px-3 text-caption font-normal text-fg-2",
+                comfortable ? "h-9 bg-app" : "h-8 bg-panel",
+                i === 0 && (comfortable ? "pl-6" : "pl-4"),
+                i === columns.length - 1 && comfortable && "pr-6",
                 c.align === "right" && "text-right",
                 c.width,
               )}
@@ -81,7 +100,8 @@ export function DataTable<T>({ columns, rows, getKey, selectedKey, onRowClick, r
                 aria-selected={selected}
                 onClick={onRowClick ? () => onRowClick(row) : undefined}
                 className={cn(
-                  "group h-9 border-b border-line transition-colors last:border-b-0 hover:bg-hover",
+                  "group border-b border-line transition-colors last:border-b-0 hover:bg-hover",
+                  comfortable ? "align-middle" : "h-9",
                   onRowClick && "cursor-pointer",
                   selected && "bg-hover",
                   rowClassName?.(row),
@@ -92,9 +112,12 @@ export function DataTable<T>({ columns, rows, getKey, selectedKey, onRowClick, r
                     key={c.id}
                     className={cn(
                       "whitespace-nowrap border-l-2 px-3 align-middle",
-                      i === 0 && "pl-4",
+                      comfortable && "py-2",
+                      i === 0 && (comfortable ? "pl-6" : "pl-4"),
+                      i === columns.length - 1 && comfortable && "pr-6",
                       i === 0 && selected ? "border-accent" : "border-transparent",
                       c.align === "right" && "tabular text-right",
+                      c.wrap && "whitespace-normal",
                     )}
                   >
                     {c.cell(row)}

@@ -463,11 +463,13 @@ export const PACKETS: Record<string, PacketCase> = {
       row("Office note", "Switch", "He switched insurance at work this month.", 1, "switched insurance at work this month"),
       row("Card", "Front", "Bajoran Health Plan, effective November 1.", 2, "BAJORAN HEALTH PLAN"),
       row("Office note", "Care", "Ten weeks of pain and seven weeks of therapy.", 1, "x 10 weeks"),
+      row("Office note", "X-ray", "Lumbar films September 3, L4-5 narrowing.", 1, "XR lumbar spine 09/03/2026"),
     ],
     criteria: [
       rule("1", "Active payer", "not_met", "Order and card disagree", "Registration still lists Federation Health. The card scanned at check-in is Bajoran.", [q(2, "BAJORAN HEALTH PLAN")]),
       rule("2a", "Symptoms ≥ 6 wks", "met", "10 wks", "The visit describes ten weeks of left leg pain.", [q(1, "x 10 weeks")]),
       rule("2b", "Conservative care ≥ 6 wks", "met", "PT 7 wks", "Seven weeks at Celestial Temple PT, discharge scanned October 27.", [q(1, "7 weeks of PT")]),
+      rule("2c", "X-rays first", "met", "X-ray 09/03", "The office note records lumbar films from September 3.", [q(1, "XR lumbar spine 09/03/2026")]),
       rule("2d", "No MRI in 12 mo", "met", "None on record", "The visit says no lumbar MRI on record.", [q(1, "No lumbar MRI on record")]),
     ],
     ...library("RAD-114 v3"),

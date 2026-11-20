@@ -1,8 +1,10 @@
-// Thin adapter over the prior-auth decision so existing callers keep their types.
+// Thin adapter over the prior-auth bucket so existing callers keep their types.
 // Below a confidence threshold counts as UNCLEAR, and UNCLEAR never counts as Met.
 
-import { decideEvaluating } from "./priorAuth/decision";
+import { bucketRun } from "./priorAuth/bucket";
+import { toStatusId } from "./priorAuth/legacy";
 import type { StatusId } from "./statuses";
+import type { Channel } from "./statuses";
 
 export type CriterionResult = "met" | "waived" | "exception_met" | "not_met" | "unclear";
 export type FailClass = "clinical" | "documents";
@@ -18,9 +20,11 @@ export interface DecisionInput {
   failedConsistencyChecks: string[];
   criteria: CriterionOutcome[];
   confidenceThreshold: number;
+  /** API insurers are submitted. Portal insurers stop for an upload. */
+  channel?: Channel | null;
 }
 
-export type DecisionStatus = Extract<StatusId, "needs_correction" | "clinical_review" | "awaiting_documents" | "ready_to_submit">;
+export type DecisionStatus = StatusId;
 
 const RESULT = {
   met: "MET",
@@ -31,7 +35,7 @@ const RESULT = {
 } as const;
 
 export function decide(input: DecisionInput): DecisionStatus {
-  const decision = decideEvaluating({
+  const decision = bucketRun({
     consistencyFailures: input.failedConsistencyChecks.map((id) => ({ id, detail: id })),
     criteria: input.criteria.map((c) => ({
       criterionId: c.id,
@@ -41,15 +45,11 @@ export function decide(input: DecisionInput): DecisionStatus {
       evidence: null,
     })),
     confidenceThreshold: input.confidenceThreshold,
+    approvalRequired: true,
+    hasCriteria: true,
+    channel: input.channel === undefined ? "api" : input.channel,
+    insurer: "the insurer",
+    policyId: "the policy",
   });
-  switch (decision.status) {
-    case "NEEDS_CORRECTION":
-      return "needs_correction";
-    case "CLINICAL_REVIEW":
-      return "clinical_review";
-    case "AWAITING_DOCUMENTS":
-      return "awaiting_documents";
-    case "READY_TO_SUBMIT":
-      return "ready_to_submit";
-  }
+  return toStatusId(decision.status);
 }

@@ -48,10 +48,10 @@ describe("Case 1 · Kirk · lumbar MRI · Federation Health RAD-114", () => {
     expect(kirk.expected.packetComplete).toBe(true);
   });
 
-  it("decision logic routes the answer key's criteria to Ready to submit (no nurse)", () => {
-    expect(kirkStatus).toBe("ready_to_submit");
-    expect(kirkStatus).toBe(kirk.expected.status);
-    expect(STATUSES[kirkStatus].group).toBe("automated");
+  it("decision logic submits a clean API packet without a nurse", () => {
+    expect(kirkStatus).toBe("submitted");
+    expect(kirk.expected.decision).toMatch(/Submit to the insurer/);
+    expect(STATUSES[kirkStatus].group).toBe("insurer");
   });
 
   it("submits via the API channel with the three attachments the policy asks for", () => {
@@ -66,7 +66,8 @@ describe("Case 1 · Kirk · lumbar MRI · Federation Health RAD-114", () => {
   it("appears on the worklist as one system-owned, on-track line", () => {
     const rows = SEED_ORDERS.filter((o) => o.caseNumber === 1).map((o) => toRow(o));
     expect(rows).toHaveLength(1);
-    expect(rows[0].order.status).toBe("ready_to_submit");
+    expect(rows[0].order.status).toBe("submitted");
+    expect(rows[0].order.reasonCode).toBe("INITIAL_REQUEST");
     expect(rows[0].ownerRole).toBe("system");
     expect(rows[0].risk).toBe(kirk.expected.timeRisk);
   });
@@ -77,7 +78,7 @@ describe("Decision logic (PRD §Evaluating)", () => {
   const base = { failedConsistencyChecks: [], confidenceThreshold: 0.85 };
 
   it("consistency failure wins over everything", () => {
-    expect(decide({ ...base, failedConsistencyChecks: ["CO-1"], criteria: kirkCriteria })).toBe("needs_correction");
+    expect(decide({ ...base, failedConsistencyChecks: ["CO-1"], criteria: kirkCriteria })).toBe("needs_admin_review");
   });
 
   it("Not met + clinical → Clinical review, even if documents are also missing", () => {
@@ -85,21 +86,21 @@ describe("Decision logic (PRD §Evaluating)", () => {
       { id: "2a", result: "not_met", failClass: "clinical", confidence: 0.95 },
       { id: "2b", result: "unclear", failClass: "documents", confidence: 0.5 },
     ];
-    expect(decide({ ...base, criteria })).toBe("clinical_review");
+    expect(decide({ ...base, criteria })).toBe("needs_clinical_review");
   });
 
   it("Unclear never counts as Met → Awaiting documents", () => {
-    expect(decide({ ...base, criteria: [ok("2a"), { ...ok("2b"), result: "unclear" }] })).toBe("awaiting_documents");
+    expect(decide({ ...base, criteria: [ok("2a"), { ...ok("2b"), result: "unclear" }] })).toBe("needs_admin_review");
   });
 
   it("Waived and Exception met pass", () => {
     expect(
       decide({ ...base, criteria: [{ ...ok("2a"), result: "waived" }, { ...ok("2d"), result: "exception_met" }] }),
-    ).toBe("ready_to_submit");
+    ).toBe("submitted");
   });
 
   it("a passing result below the confidence threshold counts as Unclear", () => {
-    expect(decide({ ...base, criteria: [{ ...ok("2a"), confidence: 0.6 }] })).toBe("awaiting_documents");
+    expect(decide({ ...base, criteria: [{ ...ok("2a"), confidence: 0.6 }] })).toBe("needs_admin_review");
   });
 });
 
@@ -108,19 +109,19 @@ describe("Time-risk policy", () => {
   const at = (hoursFromNow: number) => new Date(now.getTime() + hoursFromNow * 36e5);
 
   it("on track when far from the scan", () => {
-    expect(computeTimeRisk({ scanAt: at(24 * 9), insurer: "Federation Health", status: "ready_to_submit", now })).toBe(
+    expect(computeTimeRisk({ scanAt: at(24 * 9), insurer: "Federation Health", status: "needs_admin_review", now })).toBe(
       "on_track",
     );
   });
 
   it("at risk inside turnaround + 1 day", () => {
-    expect(computeTimeRisk({ scanAt: at(40), insurer: "Federation Health", status: "needs_correction", now })).toBe(
+    expect(computeTimeRisk({ scanAt: at(40), insurer: "Federation Health", status: "needs_admin_review", now })).toBe(
       "at_risk",
     );
   });
 
   it("slot at risk when the insurer can't answer before the scan", () => {
-    expect(computeTimeRisk({ scanAt: at(60), insurer: "Ferengi Benefit Group", status: "ready_to_submit", now })).toBe(
+    expect(computeTimeRisk({ scanAt: at(60), insurer: "Ferengi Benefit Group", status: "needs_admin_review", now })).toBe(
       "slot_at_risk",
     );
   });

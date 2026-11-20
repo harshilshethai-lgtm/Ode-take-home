@@ -89,19 +89,27 @@ function policyPage(policyRef: string | null): { title: string; page: number } |
 }
 
 export function primaryLabelFor(order: Order): string | null {
-  switch (order.status) {
-    case "ready_to_submit":
-      return "Submit";
-    case "awaiting_documents":
+  switch (order.reasonCode) {
+    case "PORTAL_UPLOAD":
+    case "SUBMISSION_FAILED":
+      return "Upload";
+    case "MISSING_DOCUMENTS":
+    case "MORE_INFO_REQUESTED":
       return "Request records";
-    case "needs_correction":
+    case "SIDE_MISMATCH":
+    case "CPT_MISMATCH":
+    case "INSURER_MISMATCH":
+    case "WRONG_PATIENT_PAGE":
       return "Correct";
-    case "unreadable":
-      return "Request resend";
-    case "clinical_review":
+    case "UNREADABLE_DOCUMENT":
+    case "NO_MATCH":
+      return "Request a clean copy";
+    case "CRITERIA_NOT_MET":
+    case "RULE_GAP":
+    case "CONFIRM_AFTER_FIX":
+    case "REPEATED_REQUESTS":
+    case "DENIED_DECIDE_APPEAL":
       return "Review";
-    case "rule_gap":
-      return "Request rule";
     default:
       return null;
   }
@@ -234,9 +242,9 @@ function kirkRecord(order: Order): CaseRecord {
   return {
     order,
     docId: order.orderNumber ?? kirk.order.orderNumber,
-    summary: "Lumbar MRI for radiculopathy, routine. Ready to submit: 8 weeks of pain and documented care meet the policy.",
+    summary: "Lumbar MRI for radiculopathy, routine. Sent to Federation Health: 8 weeks of pain and documented care meet the policy.",
     summaryCites: [packet(1, "Low back pain radiating down R leg x 8 weeks."), packet(3, "Dates of care: 9/21/2026 to 10/31/2026")],
-    primaryLabel: "Submit",
+    primaryLabel: primaryLabelFor(order),
     elements,
     flags: [],
     extracted,

@@ -19,6 +19,67 @@ export const INSURER_TURNAROUND_HOURS: Record<string, number> = {
 const DEFAULT_TURNAROUND_HOURS = 48;
 const SCAN_WATCH_HOURS = 24;
 
+/** US federal holidays for the demo year, including observed days. Deadlines do not land on these. */
+const HOLIDAYS = new Set([
+  "2026-01-01",
+  "2026-01-19",
+  "2026-02-16",
+  "2026-05-25",
+  "2026-06-19",
+  "2026-07-03",
+  "2026-07-04",
+  "2026-09-07",
+  "2026-10-12",
+  "2026-11-11",
+  "2026-11-26",
+  "2026-12-25",
+]);
+
+function localKey(d: Date): string {
+  const month = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${d.getFullYear()}-${month}-${day}`;
+}
+
+export function isBusinessDay(d: Date): boolean {
+  const day = d.getDay();
+  return day !== 0 && day !== 6 && !HOLIDAYS.has(localKey(d));
+}
+
+/** Step backward so a deadline never falls on a weekend or holiday. */
+function rollToBusinessDay(d: Date): Date {
+  const next = new Date(d);
+  while (!isBusinessDay(next)) next.setDate(next.getDate() - 1);
+  return next;
+}
+
+/** Elapsed hours that fall on a business day, weekends and holidays excluded. */
+export function businessHoursBetween(start: Date, end: Date): number {
+  if (end.getTime() <= start.getTime()) return 0;
+  let ms = 0;
+  let cursor = start.getTime();
+  const endMs = end.getTime();
+  while (cursor < endMs) {
+    const day = new Date(cursor);
+    const next = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1).getTime();
+    const slice = Math.min(next, endMs);
+    if (isBusinessDay(day)) ms += slice - cursor;
+    cursor = slice;
+  }
+  return ms / 36e5;
+}
+
+/** The calendar date `days` business days before `day`. */
+export function subtractBusinessDays(day: Date, days: number): Date {
+  const cursor = new Date(day.getTime());
+  let left = days;
+  while (left > 0) {
+    cursor.setDate(cursor.getDate() - 1);
+    if (isBusinessDay(cursor)) left -= 1;
+  }
+  return cursor;
+}
+
 export function hoursUntil(scanAt: Date, now: Date): number {
   return (scanAt.getTime() - now.getTime()) / 36e5;
 }
@@ -30,7 +91,7 @@ export function hoursUntil(scanAt: Date, now: Date): number {
  */
 export function fixByAt(scanAt: Date, insurer: string | null): Date {
   const turnaround = (insurer && INSURER_TURNAROUND_HOURS[insurer]) || DEFAULT_TURNAROUND_HOURS;
-  return new Date(scanAt.getTime() - (turnaround + 48) * 36e5);
+  return rollToBusinessDay(new Date(scanAt.getTime() - (turnaround + 48) * 36e5));
 }
 
 export function computeTimeRisk(args: {

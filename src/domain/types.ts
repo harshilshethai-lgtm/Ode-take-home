@@ -1,4 +1,5 @@
 import type { FindingFlag } from "./flags";
+import type { ProcessingStep, ReasonCode, ReasonDetail, OtherIssue } from "./priorAuth/types";
 import type { Channel, OwnerRole, StatusId } from "./statuses";
 
 export interface Person {
@@ -34,9 +35,20 @@ export interface Order {
   scheduledAt: string | null;
   status: StatusId;
   statusSince: string;
+  /** Why the order is in this status. Null only while Processing, which uses `step`. */
+  reasonCode: ReasonCode | null;
+  /** Processing progress. Null for every other status. */
+  step: ProcessingStep | null;
+  /** Facts the reason template fills. */
+  detail: ReasonDetail;
+  otherIssues: OtherIssue[];
+  /** When a missing-document follow-up comes due. Rows before that are waiting, not actionable. */
+  followUpDueAt: string | null;
+  /** Who a missing-document row is waiting on. */
+  waitingOn: string | null;
   /** Person who claimed it; null = unassigned (or system-owned). */
   assigneeId: string | null;
-  /** One line, e.g. "PT notes p.4 missing". */
+  /** One-line explanation. The reason code is the source of truth; this is the filled template. */
   reason: string;
   /** Clinical review is only confirming a coordinator fix. */
   confirmOnly?: boolean;

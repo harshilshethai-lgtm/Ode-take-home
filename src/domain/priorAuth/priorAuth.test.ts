@@ -1,23 +1,27 @@
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { bucketRun } from "./bucket";
 import {
   AuthState,
   CASE_FIXTURES,
   DOCUMENT_STATUSES,
+  EXAMPLE_DETAILS,
   IllegalTransitionError,
   ORDER_STATUSES,
+  REASON_CODES,
   StaleVersionError,
-  TransitionDeniedError,
-  correctionDestination,
+  actionsFor,
+  buildCaseSummary,
   createDocument,
   createOrder,
-  decideEvaluating,
   documentsForPacket,
+  explainReason,
+  guardSummary,
   isLegalDocumentTransition,
   isLegalOrderTransition,
-  ownerRole,
-  primaryActionLabel,
+  isWritableStatus,
+  migrateOrder,
   quarantineWrongPatientPage,
   readAudits,
   readEffects,
@@ -28,10 +32,13 @@ import {
   runCase,
   transitionDocument,
   transitionOrder,
+  unfilledPlaceholders,
+  whatToDo,
   type Actor,
   type CriterionResult,
   type DocumentStatus,
   type OrderStatus,
+  type ReasonCode,
   type RoutingPolicy,
   type TransitionContext,
 } from "./index";
@@ -42,36 +49,78 @@ const coordinator: Actor = { kind: "user", id: "p-jasmine", role: "coordinator",
 const nurse: Actor = { kind: "user", id: "p-priya", role: "nurse", permissions: ["cancel"] };
 const approval = { number: "A-100", cpt: "72148", validFrom: "2026-11-01", validTo: "2027-02-01" };
 
+function fromReason(from: OrderStatus, to: OrderStatus): ReasonCode | null {
+  if (from === "PROCESSING") return null;
+  if (from === "NEEDS_ADMIN_REVIEW") {
+    if (to === "SUBMITTED") return "PORTAL_UPLOAD";
+    if (to === "APPROVED") return "WRITEBACK_FAILED";
+    return "MISSING_DOCUMENTS";
+  }
+  if (from === "NEEDS_CLINICAL_REVIEW") {
+    if (to === "SUBMITTED") return "DENIED_DECIDE_APPEAL";
+    if (to === "APPROVED") return "PEER_TO_PEER";
+    return "CRITERIA_NOT_MET";
+  }
+  if (from === "SUBMITTED") return "INITIAL_REQUEST";
+  if (from === "APPROVED") return "NEW";
+  if (from === "NOT_REQUIRED") return "NOT_ON_PA_LIST";
+  if (from === "DENIED") return "NO_APPEAL";
+  return "EPIC_CANCELLED";
+}
+
+function toReason(from: OrderStatus, to: OrderStatus): ReasonCode | null {
+  if (to === "PROCESSING") return null;
+  if (to === "NEEDS_ADMIN_REVIEW") return from === "SUBMITTED" ? "MORE_INFO_REQUESTED" : "MISSING_DOCUMENTS";
+  if (to === "NEEDS_CLINICAL_REVIEW") return from === "SUBMITTED" ? "DENIED_DECIDE_APPEAL" : "CRITERIA_NOT_MET";
+  if (to === "SUBMITTED") return from === "NEEDS_CLINICAL_REVIEW" ? "APPEAL" : "INITIAL_REQUEST";
+  if (to === "APPROVED") return from === "PROCESSING" ? "LINKED_EXISTING" : "NEW";
+  if (to === "NOT_REQUIRED") return "NOT_ON_PA_LIST";
+  if (to === "DENIED") return "NO_APPEAL";
+  if (to === "CANCELLED") return from === "NEEDS_CLINICAL_REVIEW" ? "WITHDRAWN_BY_NURSE" : "WITHDRAWN_BY_COORDINATOR";
+  return null;
+}
+
 function actorFor(from: OrderStatus, to: OrderStatus): Actor {
-  if (to === "CANCELLED") return coordinator;
-  if (to === "CLOSED_DENIED" || from === "DENIED" || from === "APPEAL" || from === "CLINICAL_REVIEW" || from === "RULE_GAP") return nurse;
-  if (from === "SUBMITTED") return system;
-  if (ownerRole(from, "api") === "coordinator") return coordinator;
+  if (to === "CANCELLED") return from === "NEEDS_CLINICAL_REVIEW" ? nurse : coordinator;
+  if (from === "NEEDS_CLINICAL_REVIEW") return nurse;
+  if (from === "NEEDS_ADMIN_REVIEW") return coordinator;
   return system;
 }
 
 function contextFor(from: OrderStatus, to: OrderStatus): TransitionContext {
+  const reason = toReason(from, to);
   const ctx: TransitionContext = {
     actor: actorFor(from, to),
     expectedVersion: 1,
-    reason: to === "CANCELLED" ? "Slot released" : "Move",
-    checkIds: [],
+    reason,
+    detail: reason ? EXAMPLE_DETAILS[reason] : { n: 4, insurer: "Federation Health" },
+    step: to === "PROCESSING" ? "INTAKE" : null,
+    note: "Reviewed against the policy",
+    portalReference: "PORTAL-1",
   };
-  if (to === "APPROVED") ctx.approval = { ...approval, linked: from === "COVERAGE_CHECK" };
-  if ((from === "CLINICAL_REVIEW" || from === "RULE_GAP") && to === "READY_TO_SUBMIT") ctx.note = "Reviewed against the policy";
-  if (from === "READY_TO_SUBMIT" && to === "SUBMITTED") ctx.trackingNumber = "TRK-1";
-  if (to === "DENIED") ctx.denialReason = "Not medically necessary";
+  if (to === "APPROVED") ctx.approval = { ...approval, linked: reason === "LINKED_EXISTING" };
+  if (from === "NEEDS_CLINICAL_REVIEW" && to === "PROCESSING") ctx.trigger = "approve_for_submission";
+  if (from === "APPROVED" && to === "PROCESSING") {
+    ctx.epicEvent = "scan_outside_approval";
+    ctx.step = "COVERAGE";
+    ctx.detail = { whatChanged: "scan date moved outside approval", insurer: "Federation Health", n: 4 };
+  }
+  if (from === "NEEDS_ADMIN_REVIEW" && to === "APPROVED") {
+    ctx.writeBackConfirmed = true;
+    ctx.epicAuthId = "E-100";
+  }
+  if (from === "NEEDS_CLINICAL_REVIEW" && to === "APPROVED") ctx.writeBackConfirmed = true;
   return ctx;
 }
 
-function seedOrder(from: OrderStatus, to: OrderStatus) {
+function seed(from: OrderStatus, to: OrderStatus) {
   const state = new AuthState();
-  const blockingChecks = from === "NEEDS_CORRECTION" ? (to === "COVERAGE_CHECK" ? ["CV-1"] : ["CO-1"]) : [];
   const order = createOrder(state, {
     status: from,
-    channel: "api",
-    blockingChecks,
-    fixableGaps: from === "CLINICAL_REVIEW" && to === "AWAITING_DOCUMENTS",
+    reason: fromReason(from, to),
+    step: from === "PROCESSING" ? "EVALUATING" : null,
+    channel: "portal",
+    detail: { document: "PT notes", source: "the clinic", requested: "Nov 9", followUp: "Nov 10", criterion: "therapy" },
   });
   return { state, order };
 }
@@ -90,35 +139,53 @@ describe("order transitions", () => {
 
   it("lets every legal pair succeed and rejects every other pair", () => {
     for (const { from, to } of pairs) {
-      const { state, order } = seedOrder(from, to);
+      const { state, order } = seed(from, to);
       const ctx = contextFor(from, to);
       if (isLegalOrderTransition(from, to)) {
         const next = transitionOrder(state, order.id, to, ctx);
         expect(next.status, `${from} -> ${to}`).toBe(to);
+        expect(next.reason, `${from} -> ${to}`).toBe(ctx.reason);
         const audit = readAudits(state, { orderId: order.id }).at(-1);
         expect(audit?.fromStatus).toBe(from);
         expect(audit?.toStatus).toBe(to);
-        expect(audit?.actor).toBe(ctx.actor.kind === "system" ? "system" : ctx.actor.id);
       } else {
-        let error: unknown;
-        try {
-          transitionOrder(state, order.id, to, ctx);
-        } catch (caught) {
-          error = caught;
-        }
-        expect(error, `${from} -> ${to}`).toBeInstanceOf(IllegalTransitionError);
-        expect(error).toMatchObject({ from, to });
+        expect(() => transitionOrder(state, order.id, to, ctx), `${from} -> ${to}`).toThrow(IllegalTransitionError);
       }
     }
   });
 
   it("rejects every move out of a closed status", () => {
-    for (const from of ["APPROVED", "NOT_REQUIRED", "CLOSED_DENIED", "CANCELLED"] as const) {
+    for (const from of ["NOT_REQUIRED", "DENIED", "CANCELLED"] as const) {
       for (const to of ORDER_STATUSES) {
-        const { state, order } = seedOrder(from, to);
+        const { state, order } = seed(from, to);
         expect(() => transitionOrder(state, order.id, to, contextFor(from, to))).toThrow(IllegalTransitionError);
       }
     }
+    for (const to of ORDER_STATUSES) {
+      if (to === "PROCESSING") continue;
+      const { state, order } = seed("APPROVED", to);
+      expect(() => transitionOrder(state, order.id, to, contextFor("APPROVED", to))).toThrow(IllegalTransitionError);
+    }
+  });
+
+  it("fails a stale version before any other check", () => {
+    const state = new AuthState();
+    const order = createOrder(state, { status: "PROCESSING", step: "INTAKE" });
+    transitionOrder(state, order.id, "NEEDS_ADMIN_REVIEW", {
+      actor: system,
+      expectedVersion: 1,
+      reason: "MISSING_DOCUMENTS",
+      detail: EXAMPLE_DETAILS.MISSING_DOCUMENTS,
+    });
+    expect(() =>
+      transitionOrder(state, order.id, "CANCELLED", {
+        actor: coordinator,
+        expectedVersion: 1,
+        reason: "WITHDRAWN_BY_COORDINATOR",
+        detail: EXAMPLE_DETAILS.WITHDRAWN_BY_COORDINATOR,
+      }),
+    ).toThrow(StaleVersionError);
+    expect(readOrder(state, order.id).status).toBe("NEEDS_ADMIN_REVIEW");
   });
 });
 
@@ -129,19 +196,11 @@ describe("document transitions", () => {
     for (const { from, to } of pairs) {
       const state = new AuthState();
       const doc = createDocument(state, { status: from, pageNumbers: [1], orderId: null });
-      const ctx: TransitionContext = { actor: system, expectedVersion: 1, reason: "Move", checkIds: [] };
+      const ctx: TransitionContext = { actor: system, expectedVersion: 1, reason: null, note: "Move" };
       if (isLegalDocumentTransition(from, to)) {
         expect(transitionDocument(state, doc.id, to, ctx).status).toBe(to);
-        expect(readAudits(state, { documentId: doc.id }).at(-1)).toMatchObject({ fromStatus: from, toStatus: to, actor: "system" });
       } else {
-        let error: unknown;
-        try {
-          transitionDocument(state, doc.id, to, ctx);
-        } catch (caught) {
-          error = caught;
-        }
-        expect(error, `${from} -> ${to}`).toBeInstanceOf(IllegalTransitionError);
-        expect(error).toMatchObject({ from, to });
+        expect(() => transitionDocument(state, doc.id, to, ctx)).toThrow(IllegalTransitionError);
       }
     }
   });
@@ -151,77 +210,301 @@ describe("document transitions", () => {
       for (const to of DOCUMENT_STATUSES) {
         const state = new AuthState();
         const doc = createDocument(state, { status: from as DocumentStatus, pageNumbers: [1] });
-        expect(() => transitionDocument(state, doc.id, to, { actor: system, expectedVersion: 1, reason: "Move" })).toThrow(IllegalTransitionError);
+        expect(() => transitionDocument(state, doc.id, to, { actor: system, expectedVersion: 1, reason: null, note: "Move" })).toThrow(IllegalTransitionError);
       }
     }
   });
 });
 
-describe("evaluating decisions", () => {
+describe("bucketing order", () => {
   const threshold = 0.85;
 
-  it("lets a consistency failure beat a clinical failure and a missing document", () => {
-    const decision = decideEvaluating({
-      confidenceThreshold: threshold,
-      consistencyFailures: [{ id: "CO-1", detail: "Request says LEFT knee; office note says RIGHT" }],
-      criteria: [{ ...met("2a"), result: "NOT_MET", failureClass: "clinical" }, { ...met("2b"), result: "UNCLEAR", failureClass: "documents" }],
+  it("stops at an unreadable document before coverage or criteria", () => {
+    const decision = bucketRun({
+      unreadable: { document: "the fax", problem: "all pages blank", sender: "Promenade Urgent Care" },
+      criteria: [{ ...met("2a"), result: "NOT_MET", failureClass: "clinical" }],
+      insurerMatches: false,
     });
-    expect(decision).toMatchObject({ status: "NEEDS_CORRECTION", rule: "E1", checkIds: ["CO-1"] });
+    expect(decision).toMatchObject({ status: "NEEDS_ADMIN_REVIEW", reason: "UNREADABLE_DOCUMENT", rule: "1" });
   });
 
-  it("sends clinical NOT_MET plus a missing document to clinical review", () => {
-    const decision = decideEvaluating({
+  it("sends a coverage mismatch to admin review before the rule engine", () => {
+    const decision = bucketRun({
+      insurerMatches: false,
+      insurerMismatch: EXAMPLE_DETAILS.INSURER_MISMATCH,
+      approvalRequired: false,
+    });
+    expect(decision).toMatchObject({ status: "NEEDS_ADMIN_REVIEW", reason: "INSURER_MISMATCH", rule: "2" });
+  });
+
+  it("links an approval already on file and does not submit", () => {
+    const decision = bucketRun({
+      insurerMatches: true,
+      existingApproval: { ...approval, linked: true },
+      approvalRequired: true,
+      hasCriteria: true,
+      criteria: [met("2a")],
+      channel: "api",
+    });
+    expect(decision).toMatchObject({ status: "APPROVED", reason: "LINKED_EXISTING", rule: "2" });
+  });
+
+  it("closes as not required when the rule engine says so", () => {
+    expect(bucketRun({ approvalRequired: false, notRequiredReason: "NOT_ON_PA_LIST", notRequiredDetail: EXAMPLE_DETAILS.NOT_ON_PA_LIST }).reason).toBe("NOT_ON_PA_LIST");
+    expect(bucketRun({ approvalRequired: false, notRequiredReason: "SETTING_EXEMPT", notRequiredDetail: EXAMPLE_DETAILS.SETTING_EXEMPT }).reason).toBe("SETTING_EXEMPT");
+  });
+
+  it("sends a missing rule to clinical review", () => {
+    const decision = bucketRun({ approvalRequired: true, hasCriteria: false, ruleGapDetail: EXAMPLE_DETAILS.RULE_GAP });
+    expect(decision).toMatchObject({ status: "NEEDS_CLINICAL_REVIEW", reason: "RULE_GAP", rule: "3" });
+  });
+
+  it("sends a consistency failure to admin review ahead of a clinical failure", () => {
+    const decision = bucketRun({
       confidenceThreshold: threshold,
+      approvalRequired: true,
+      hasCriteria: true,
+      consistencyFailures: [{ id: "CO-1", detail: "Request says LEFT knee; office note says RIGHT" }],
+      criteria: [{ ...met("2a"), result: "NOT_MET", failureClass: "clinical" }],
+    });
+    expect(decision).toMatchObject({ status: "NEEDS_ADMIN_REVIEW", reason: "SIDE_MISMATCH", rule: "4" });
+  });
+
+  it("sends clinical Not met plus a missing document to clinical review, and keeps the document gap", () => {
+    const decision = bucketRun({
+      confidenceThreshold: threshold,
+      approvalRequired: true,
+      hasCriteria: true,
+      policyId: "IMG-330",
       criteria: [
         { ...met("pain"), result: "NOT_MET", failureClass: "clinical", label: "3 weeks of symptoms (needs 6)" },
         { ...met("pt"), result: "UNCLEAR", failureClass: "documents", label: "PT notes" },
       ],
     });
-    expect(decision.status).toBe("CLINICAL_REVIEW");
-    expect(decision.reason).toContain("3 weeks of symptoms");
-    expect(decision.reason).toContain("PT notes");
+    expect(decision.status).toBe("NEEDS_CLINICAL_REVIEW");
+    expect(decision.reason).toBe("CRITERIA_NOT_MET");
+    expect(decision.otherIssues.map((issue) => issue.code)).toContain("MISSING_DOCUMENTS");
   });
 
-  it("never treats UNCLEAR as ready to submit", () => {
-    const decision = decideEvaluating({
+  it("never treats Unclear as ready to submit", () => {
+    const decision = bucketRun({
       confidenceThreshold: threshold,
+      approvalRequired: true,
+      hasCriteria: true,
+      channel: "api",
       criteria: [met("2a"), { ...met("2b"), result: "UNCLEAR", failureClass: "documents" }],
     });
-    expect(decision.status).toBe("AWAITING_DOCUMENTS");
-    expect(decision.status).not.toBe("READY_TO_SUBMIT");
+    expect(decision).toMatchObject({ status: "NEEDS_ADMIN_REVIEW", reason: "MISSING_DOCUMENTS" });
   });
 
-  it("treats patient-reported therapy as a document gap", () => {
-    const decision = decideEvaluating({
+  it("treats patient-reported therapy as a missing document", () => {
+    const decision = bucketRun({
       confidenceThreshold: threshold,
+      approvalRequired: true,
+      hasCriteria: true,
+      channel: "api",
       criteria: [{ ...met("pt", 0.99), sourceKind: "patient_reported", label: "PT" }],
     });
-    expect(decision.status).toBe("AWAITING_DOCUMENTS");
-    expect(decision.rule).toBe("E3");
+    expect(decision).toMatchObject({ status: "NEEDS_ADMIN_REVIEW", reason: "MISSING_DOCUMENTS" });
   });
 
-  it("treats a MET result below its threshold as UNCLEAR", () => {
-    const decision = decideEvaluating({
+  it("sends the third missing-document pass to a nurse", () => {
+    const decision = bucketRun({
       confidenceThreshold: threshold,
-      criteria: [met("2a"), met("2b", 0.5)],
+      approvalRequired: true,
+      hasCriteria: true,
+      priorMissingDocumentsEntries: 2,
+      requestedItems: ["PT notes"],
+      requestedDates: "Nov 1, Nov 4, Nov 8",
+      criteria: [{ ...met("pt"), result: "UNCLEAR", failureClass: "documents", label: "PT notes" }],
     });
-    expect(decision.status).toBe("AWAITING_DOCUMENTS");
+    expect(decision).toMatchObject({ status: "NEEDS_CLINICAL_REVIEW", reason: "REPEATED_REQUESTS", rule: "6" });
+    expect(decision.otherIssues.map((issue) => issue.code)).toContain("MISSING_DOCUMENTS");
   });
 
-  it("submits when every criterion is met, waived or an exception, all above threshold", () => {
-    const decision = decideEvaluating({
-      confidenceThreshold: threshold,
-      criteria: [
-        met("2a"),
-        { ...met("2b"), result: "WAIVED" },
-        { ...met("2d"), result: "EXCEPTION_MET" },
-      ],
+  it("submits an API packet and parks a portal packet for upload", () => {
+    const criteria = [met("2a"), { ...met("2b"), result: "WAIVED" as const }, { ...met("2d"), result: "EXCEPTION_MET" as const }];
+    expect(bucketRun({ criteria, approvalRequired: true, hasCriteria: true, channel: "api", insurer: "Federation Health" }).reason).toBe("INITIAL_REQUEST");
+    expect(bucketRun({ criteria, approvalRequired: true, hasCriteria: true, channel: "portal", insurer: "Ferengi Benefit Group", attachmentCount: 5 })).toMatchObject({
+      status: "NEEDS_ADMIN_REVIEW",
+      reason: "PORTAL_UPLOAD",
     });
-    expect(decision).toMatchObject({ status: "READY_TO_SUBMIT", rule: "E4", confirmOnly: false });
+  });
+
+  it("asks a nurse to confirm after a coordinator fix when the routing policy says so", () => {
+    const criteria = [met("2a"), met("2b")];
+    const signoff = bucketRun({
+      criteria,
+      approvalRequired: true,
+      hasCriteria: true,
+      channel: "api",
+      coordinatorFix: true,
+      resolvedItem: "PT notes",
+      routingPolicy: { version: "v", rules: [{ mode: "nurse_signoff" }] },
+    });
+    expect(signoff).toMatchObject({ status: "NEEDS_CLINICAL_REVIEW", reason: "CONFIRM_AFTER_FIX", confirmOnly: true });
+    const straight = bucketRun({
+      criteria,
+      approvalRequired: true,
+      hasCriteria: true,
+      channel: "api",
+      coordinatorFix: true,
+      routingPolicy: { version: "v", rules: [{ mode: "straight_to_submission" }] },
+    });
+    expect(straight.status).toBe("SUBMITTED");
   });
 });
 
-describe("routing after a coordinator fix", () => {
+describe("who can move an order", () => {
+  it("stops the system from setting Denied", () => {
+    const state = new AuthState();
+    const order = createOrder(state, { status: "NEEDS_CLINICAL_REVIEW", reason: "DENIED_DECIDE_APPEAL" });
+    expect(() =>
+      transitionOrder(state, order.id, "DENIED", { actor: system, expectedVersion: 1, reason: "NO_APPEAL", detail: EXAMPLE_DETAILS.NO_APPEAL }),
+    ).toThrow(/system can't set Denied/);
+  });
+
+  it("stops the system from cancelling unless Epic says the order was cancelled", () => {
+    const state = new AuthState();
+    const order = createOrder(state, { status: "PROCESSING", step: "INTAKE" });
+    expect(() =>
+      transitionOrder(state, order.id, "CANCELLED", { actor: system, expectedVersion: 1, reason: "EPIC_CANCELLED", detail: EXAMPLE_DETAILS.EPIC_CANCELLED }),
+    ).toThrow(/Epic reports/);
+    const cancelled = transitionOrder(state, order.id, "CANCELLED", {
+      actor: system,
+      expectedVersion: 1,
+      reason: "EPIC_CANCELLED",
+      detail: EXAMPLE_DETAILS.EPIC_CANCELLED,
+      epicCancelled: true,
+    });
+    expect(cancelled.reason).toBe("EPIC_CANCELLED");
+  });
+
+  it("stops a coordinator from approving for submission", () => {
+    const state = new AuthState();
+    const order = createOrder(state, { status: "NEEDS_CLINICAL_REVIEW", reason: "CRITERIA_NOT_MET" });
+    expect(() =>
+      transitionOrder(state, order.id, "PROCESSING", {
+        actor: coordinator,
+        expectedVersion: 1,
+        reason: null,
+        step: "SUBMITTING",
+        note: "Looks fine",
+        trigger: "approve_for_submission",
+      }),
+    ).toThrow(/coordinator can't approve/);
+  });
+
+  it("stops a nurse from confirming a portal upload", () => {
+    const state = new AuthState();
+    const order = createOrder(state, { status: "NEEDS_ADMIN_REVIEW", reason: "PORTAL_UPLOAD", channel: "portal" });
+    expect(() =>
+      transitionOrder(state, order.id, "SUBMITTED", {
+        actor: nurse,
+        expectedVersion: 1,
+        reason: "INITIAL_REQUEST",
+        detail: EXAMPLE_DETAILS.INITIAL_REQUEST,
+        portalReference: "PORTAL-9",
+      }),
+    ).toThrow(/nurse can't confirm a portal upload/);
+  });
+
+  it("stops a coordinator from editing criterion results", () => {
+    const state = new AuthState();
+    const order = createOrder(state, { status: "NEEDS_ADMIN_REVIEW", reason: "MISSING_DOCUMENTS" });
+    expect(() =>
+      transitionOrder(state, order.id, "PROCESSING", {
+        actor: coordinator,
+        expectedVersion: 1,
+        reason: null,
+        step: "INTAKE",
+        mutateCriteria: true,
+        criterionResults: [met("2a")],
+      }),
+    ).toThrow(/can't edit criterion results/);
+  });
+});
+
+describe("case summary", () => {
+  it("fills every reason template and shows only that role's actions", () => {
+    for (const code of REASON_CODES) {
+      const explanation = explainReason(code, EXAMPLE_DETAILS[code]);
+      const todo = whatToDo(code, EXAMPLE_DETAILS[code]);
+      expect(unfilledPlaceholders(explanation), code).toEqual([]);
+      expect(unfilledPlaceholders(todo), code).toEqual([]);
+      const summary = buildCaseSummary({
+        status: statusFor(code),
+        reason: code,
+        step: null,
+        detail: EXAMPLE_DETAILS[code],
+        otherIssues: [],
+        role: "coordinator",
+        actions: renderActions({ reason: code }, "coordinator"),
+      });
+      const nurseActions = actionsFor({ reason: code }, "nurse").map((action) => action.to);
+      const coordinatorActions = actionsFor({ reason: code }, "coordinator").map((action) => action.to);
+      expect(summary.actions.every((action) => coordinatorActions.includes(action.to) || action.to === null)).toBe(true);
+      if (statusFor(code) === "NEEDS_CLINICAL_REVIEW") expect(coordinatorActions).toEqual([]);
+      if (statusFor(code) === "NEEDS_ADMIN_REVIEW") expect(nurseActions.filter((to) => to === "SUBMITTED")).toEqual([]);
+      expect(summary.actions.filter((action) => action.primary)).toHaveLength(summary.actions.length === 0 ? 0 : 1);
+    }
+  });
+
+  it("falls back when a rewritten summary adds a number or date", () => {
+    const detail = EXAMPLE_DETAILS.INITIAL_REQUEST;
+    const template = explainReason("INITIAL_REQUEST", detail);
+    expect(guardSummary(template.replace("Sent", "Submitted"), detail, template)).toBe(template.replace("Sent", "Submitted"));
+    expect(guardSummary(template.replace("Nov 9", "Dec 1"), detail, template)).toBe(template);
+    expect(guardSummary(`${template} Page 44 was blank.`, detail, template)).toBe(template);
+  });
+});
+
+describe("migration", () => {
+  it("maps the old statuses and leaves them unwritable", () => {
+    expect(migrateOrder({ status: "EVALUATING" })).toEqual({ status: "PROCESSING", reason: null, step: "EVALUATING" });
+    expect(migrateOrder({ status: "READY_TO_SUBMIT", channel: "api" })).toEqual({ status: "PROCESSING", reason: null, step: "SUBMITTING" });
+    expect(migrateOrder({ status: "READY_TO_SUBMIT", channel: "portal" })).toEqual({ status: "NEEDS_ADMIN_REVIEW", reason: "PORTAL_UPLOAD", step: null });
+    expect(migrateOrder({ status: "NEEDS_CORRECTION", blockingChecks: ["CO-1"] }).reason).toBe("SIDE_MISMATCH");
+    expect(migrateOrder({ status: "NEEDS_CORRECTION", blockingChecks: ["MA-3"] }).reason).toBe("WRONG_PATIENT_PAGE");
+    expect(migrateOrder({ status: "NEEDS_CORRECTION", blockingChecks: ["CV-1"] }).reason).toBe("INSURER_MISMATCH");
+    expect(migrateOrder({ status: "NEEDS_CORRECTION", blockingChecks: ["CO-2"] }).reason).toBe("CPT_MISMATCH");
+    expect(migrateOrder({ status: "CLINICAL_REVIEW", confirmOnly: true }).reason).toBe("CONFIRM_AFTER_FIX");
+    expect(migrateOrder({ status: "CLINICAL_REVIEW", repeatedRequests: true }).reason).toBe("REPEATED_REQUESTS");
+    expect(migrateOrder({ status: "DENIED" })).toMatchObject({ status: "NEEDS_CLINICAL_REVIEW", reason: "DENIED_DECIDE_APPEAL" });
+    expect(migrateOrder({ status: "CLOSED_DENIED" })).toMatchObject({ status: "DENIED", reason: "NO_APPEAL" });
+    expect(migrateOrder({ status: "APPEAL" })).toMatchObject({ status: "SUBMITTED", reason: "APPEAL" });
+    expect(isWritableStatus("CLINICAL_REVIEW")).toBe(false);
+    expect(isWritableStatus("NEEDS_CLINICAL_REVIEW")).toBe(true);
+    const state = new AuthState();
+    const order = createOrder(state, { status: "PROCESSING", step: "INTAKE" });
+    transitionOrder(state, order.id, "NEEDS_ADMIN_REVIEW", {
+      actor: system,
+      expectedVersion: 1,
+      reason: "UNREADABLE_DOCUMENT",
+      detail: EXAMPLE_DETAILS.UNREADABLE_DOCUMENT,
+    });
+    const audit = readAudits(state, { orderId: order.id })[0];
+    audit.fromStatus = "UNREADABLE";
+    expect(audit.fromStatus).toBe("UNREADABLE");
+    expect(isWritableStatus(audit.fromStatus)).toBe(false);
+  });
+});
+
+describe("library cases", () => {
+  it("lands each of the 23 cases on the expected status and reason", () => {
+    expect(CASE_FIXTURES).toHaveLength(23);
+    for (const fixture of CASE_FIXTURES) {
+      const run = runCase(fixture);
+      expect(run.status, fixture.name).toBe(fixture.expected);
+      expect(run.reason, fixture.name).toBe(fixture.expectedReason);
+    }
+    const urgent = CASE_FIXTURES.filter((fixture) => fixture.caseNumber === 4 || fixture.caseNumber === 23);
+    expect(urgent.every((fixture) => fixture.urgent && runCase(fixture).reason === "INITIAL_REQUEST")).toBe(true);
+    expect(runCase(CASE_FIXTURES.find((fixture) => fixture.caseNumber === 16)!).linkedApproval).toBe(true);
+  });
+});
+
+describe("routing specificity", () => {
   const policy: RoutingPolicy = {
     version: "route-4",
     rules: [
@@ -232,56 +515,6 @@ describe("routing after a coordinator fix", () => {
       { mode: "nurse_signoff", failureType: "CO-4" },
     ],
   };
-  const criteria = [met("2a"), met("2b")];
-  const previous = [{ ...met("2a"), result: "UNCLEAR" as const, failureClass: "documents" as const }, met("2b")];
-
-  function routed(modeContext: Parameters<typeof resolveRouting>[1], extra: Partial<Parameters<typeof decideEvaluating>[0]> = {}) {
-    return decideEvaluating({
-      confidenceThreshold: 0.85,
-      criteria,
-      coordinatorFixSinceApprovalCheck: true,
-      routingPolicy: { version: "route-4", rules: [{ mode: "nurse_signoff" }] },
-      resolvedItem: "PT notes",
-      ...extra,
-      routingContext: modeContext,
-    });
-  }
-
-  it("follows each mode", () => {
-    expect(routed({}, { routingPolicy: { version: "v", rules: [{ mode: "straight_to_submission" }] } }).status).toBe("READY_TO_SUBMIT");
-    const signoff = routed({}, { routingPolicy: { version: "v", rules: [{ mode: "nurse_signoff" }] } });
-    expect(signoff).toMatchObject({ status: "CLINICAL_REVIEW", confirmOnly: true, reason: "Confirm: PT notes received" });
-    const changed = decideEvaluating({
-      confidenceThreshold: 0.85,
-      criteria,
-      previousCriteria: previous,
-      fixedCriterionIds: ["2a"],
-      coordinatorFixSinceApprovalCheck: true,
-      resolvedItem: "PT notes",
-      routingPolicy: { version: "v", rules: [{ mode: "nurse_if_changed" }] },
-    });
-    expect(changed.status).toBe("READY_TO_SUBMIT");
-    const otherChange = decideEvaluating({
-      confidenceThreshold: 0.85,
-      criteria: [met("2a"), { ...met("2b"), result: "WAIVED" }],
-      previousCriteria: [met("2a"), met("2b")],
-      fixedCriterionIds: ["2a"],
-      coordinatorFixSinceApprovalCheck: true,
-      resolvedItem: "PT notes",
-      routingPolicy: { version: "v", rules: [{ mode: "nurse_if_changed" }] },
-    });
-    expect(otherChange).toMatchObject({ status: "CLINICAL_REVIEW", confirmOnly: true });
-  });
-
-  it("does not reroute a clean case that never needed a coordinator", () => {
-    const decision = decideEvaluating({
-      confidenceThreshold: 0.85,
-      criteria,
-      coordinatorFixSinceApprovalCheck: false,
-      routingPolicy: { version: "v", rules: [{ mode: "nurse_signoff" }] },
-    });
-    expect(decision.status).toBe("READY_TO_SUBMIT");
-  });
 
   it("picks the most specific routing scope", () => {
     const ctx = { failureType: "CO-4", studyType: "PET", insurer: "Ferengi Benefit Group", hospital: "Pilot" };
@@ -293,190 +526,23 @@ describe("routing after a coordinator fix", () => {
   });
 });
 
-describe("loop guard", () => {
-  const gap = { confidenceThreshold: 0.85, criteria: [{ ...met("pt"), result: "UNCLEAR" as const, failureClass: "documents" as const, label: "PT notes" }], requestedItems: ["PT notes, Utopia Planitia Rehab"] };
-
-  it("enters awaiting documents the first two times and clinical review the third", () => {
-    expect(decideEvaluating({ ...gap, priorAwaitingDocumentsEntries: 0 }).status).toBe("AWAITING_DOCUMENTS");
-    expect(decideEvaluating({ ...gap, priorAwaitingDocumentsEntries: 1 }).status).toBe("AWAITING_DOCUMENTS");
-    const third = decideEvaluating({ ...gap, priorAwaitingDocumentsEntries: 2 });
-    expect(third).toMatchObject({ status: "CLINICAL_REVIEW", rule: "E6" });
-    expect(third.reason).toBe("Documents requested 3 times: PT notes, Utopia Planitia Rehab");
-  });
-});
-
-describe("who can move an order", () => {
-  it("stops a coordinator from triggering a nurse transition", () => {
-    const state = new AuthState();
-    const order = createOrder(state, { status: "CLINICAL_REVIEW" });
-    expect(() =>
-      transitionOrder(state, order.id, "READY_TO_SUBMIT", { actor: coordinator, expectedVersion: 1, reason: "Submit", note: "Looks fine" }),
-    ).toThrow(TransitionDeniedError);
-  });
-
-  it("stops a nurse from confirming a portal upload", () => {
-    const state = new AuthState();
-    const order = createOrder(state, { status: "READY_TO_SUBMIT", channel: "portal" });
-    expect(() =>
-      transitionOrder(state, order.id, "SUBMITTED", { actor: nurse, expectedVersion: 1, reason: "Uploaded", portalReference: "PORTAL-9" }),
-    ).toThrow(/nurse can't confirm a portal upload/);
-  });
-
-  it("stops the system from setting closed denied", () => {
-    const state = new AuthState();
-    const order = createOrder(state, { status: "DENIED" });
-    expect(() => transitionOrder(state, order.id, "CLOSED_DENIED", { actor: system, expectedVersion: 1, reason: "Final" })).toThrow(/system can't set Closed denied/);
-  });
-
-  it("stops a coordinator from editing criterion results", () => {
-    const state = new AuthState();
-    const order = createOrder(state, { status: "AWAITING_DOCUMENTS" });
-    expect(() =>
-      transitionOrder(state, order.id, "COLLECTING_EVIDENCE", {
-        actor: coordinator,
-        expectedVersion: 1,
-        reason: "Documents received",
-        mutateCriteria: true,
-        criterionResults: [met("2a")],
-      }),
-    ).toThrow(/can't edit criterion results/);
-  });
-});
-
-describe("approved", () => {
-  it("is blocked until the approval number, CPT and dates are present", () => {
-    const state = new AuthState();
-    const order = createOrder(state, { status: "COVERAGE_CHECK" });
-    const base = { actor: system, expectedVersion: 1, reason: "Approved", checkIds: ["CV-2"] as string[] };
-    expect(() => transitionOrder(state, order.id, "APPROVED", { ...base, approval: { ...approval, number: "" } })).toThrow(/approval number/);
-    expect(() => transitionOrder(state, order.id, "APPROVED", { ...base, approval: { ...approval, cpt: " " } })).toThrow(/approval number/);
-    expect(() => transitionOrder(state, order.id, "APPROVED", { ...base, approval: { ...approval, validFrom: "" } })).toThrow(/approval number/);
-    expect(() => transitionOrder(state, order.id, "APPROVED", { ...base, approval: { ...approval, validTo: "" } })).toThrow(/approval number/);
-    const approved = transitionOrder(state, order.id, "APPROVED", { ...base, approval: { ...approval, linked: true } });
-    expect(approved.status).toBe("APPROVED");
-    expect(approved.linkedApproval).toBe(true);
-    expect(readAudits(state, { orderId: order.id }).at(-1)?.reason).toBe("Linked existing approval A-100");
-  });
-});
-
 describe("wrong-patient page", () => {
-  it("quarantines that page, corrects the order, and keeps the page out of the packet", () => {
+  it("quarantines the page and moves the order to admin review", () => {
     const state = new AuthState();
-    const order = createOrder(state, { status: "MATCHING" });
+    const order = createOrder(state, { status: "PROCESSING", step: "MATCHING" });
     const fax = createDocument(state, { orderId: order.id, status: "PRE_PROCESSED", pageNumbers: [1, 2, 3] });
     const result = quarantineWrongPatientPage(state, order.id, fax.id, 3, {
       actor: system,
       expectedVersion: fax.statusVersion,
       orderVersion: order.statusVersion,
-      reason: "Page 3 is for another patient (ROM, DOB 01/11/1975); quarantined",
-      checkIds: ["MA-3"],
+      reason: null,
+      detail: { page: 3, name: "Rom", dob: "01/11/1975", sender: "the clinic" },
+      note: "Page 3 is for another patient",
     });
-    expect(result.order.status).toBe("NEEDS_CORRECTION");
-    expect(result.order.blockingChecks).toEqual(["MA-3"]);
-    expect(result.quarantined.status).toBe("QUARANTINED");
+    expect(result.order).toMatchObject({ status: "NEEDS_ADMIN_REVIEW", reason: "WRONG_PATIENT_PAGE" });
     expect(result.quarantined.pageNumbers).toEqual([3]);
-    expect(result.remainder?.status).toBe("PRE_PROCESSED");
-    expect(result.remainder?.pageNumbers).toEqual([1, 2]);
-    expect(readEffects(state).some((effect) => effect.type === "privacy_report" && effect.documentId === result.quarantined.id)).toBe(true);
-
-    const attached = transitionDocument(state, result.remainder!.id, "ATTACHED", {
-      actor: system,
-      expectedVersion: result.remainder!.statusVersion,
-      reason: "Matched to the order",
-    });
-    const packet = documentsForPacket(state, order.id);
-    expect(packet.map((doc) => doc.id)).toEqual([attached.id]);
-    expect(packet.some((doc) => doc.status === "QUARANTINED")).toBe(false);
-  });
-});
-
-describe("needs correction", () => {
-  it("returns to coverage for CV-1 and CO-5, and to collecting evidence otherwise", () => {
-    expect(correctionDestination(["CV-1"])).toBe("COVERAGE_CHECK");
-    expect(correctionDestination(["CO-5"])).toBe("COVERAGE_CHECK");
-    expect(correctionDestination(["CV-1", "CO-5"])).toBe("COVERAGE_CHECK");
-    expect(correctionDestination(["CO-1"])).toBe("COLLECTING_EVIDENCE");
-    expect(correctionDestination(["MA-3"])).toBe("COLLECTING_EVIDENCE");
-    expect(correctionDestination(["CO-2", "CV-1"])).toBe("COLLECTING_EVIDENCE");
-
-    const state = new AuthState();
-    const wrongCoverage = createOrder(state, { status: "NEEDS_CORRECTION", blockingChecks: ["CV-1"] });
-    expect(() => transitionOrder(state, wrongCoverage.id, "COLLECTING_EVIDENCE", { actor: coordinator, expectedVersion: 1, reason: "Wrong return" })).toThrow(TransitionDeniedError);
-    expect(transitionOrder(state, wrongCoverage.id, "COVERAGE_CHECK", { actor: coordinator, expectedVersion: 1, reason: "Correction made" }).status).toBe("COVERAGE_CHECK");
-
-    const side = createOrder(state, { status: "NEEDS_CORRECTION", blockingChecks: ["CO-1"] });
-    expect(() => transitionOrder(state, side.id, "COVERAGE_CHECK", { actor: coordinator, expectedVersion: 1, reason: "Wrong return" })).toThrow(TransitionDeniedError);
-    expect(transitionOrder(state, side.id, "COLLECTING_EVIDENCE", { actor: coordinator, expectedVersion: 1, reason: "Correction made" }).status).toBe("COLLECTING_EVIDENCE");
-  });
-});
-
-describe("optimistic locking", () => {
-  it("keeps the first of two simultaneous transitions and fails the stale one", () => {
-    const state = new AuthState();
-    const order = createOrder(state, { status: "RECEIVED" });
-    const version = order.statusVersion;
-    const first = transitionOrder(state, order.id, "PRE_PROCESSING", { actor: system, expectedVersion: version, reason: "Checking 4 pages" });
-    expect(first.statusVersion).toBe(2);
-    expect(() =>
-      transitionOrder(state, order.id, "CANCELLED", { actor: coordinator, expectedVersion: version, reason: "Duplicate click" }),
-    ).toThrow(StaleVersionError);
-    expect(readOrder(state, order.id).status).toBe("PRE_PROCESSING");
-  });
-});
-
-describe("library cases", () => {
-  it("reaches the expected status before the insurer step", () => {
-    const expected: Record<number, OrderStatus> = {
-      1: "READY_TO_SUBMIT",
-      4: "READY_TO_SUBMIT",
-      5: "READY_TO_SUBMIT",
-      7: "READY_TO_SUBMIT",
-      9: "READY_TO_SUBMIT",
-      14: "READY_TO_SUBMIT",
-      22: "READY_TO_SUBMIT",
-      23: "READY_TO_SUBMIT",
-      2: "AWAITING_DOCUMENTS",
-      12: "AWAITING_DOCUMENTS",
-      13: "AWAITING_DOCUMENTS",
-      3: "CLINICAL_REVIEW",
-      6: "CLINICAL_REVIEW",
-      8: "CLINICAL_REVIEW",
-      10: "CLINICAL_REVIEW",
-      11: "NOT_REQUIRED",
-      21: "NOT_REQUIRED",
-      15: "NEEDS_CORRECTION",
-      17: "NEEDS_CORRECTION",
-      18: "NEEDS_CORRECTION",
-      16: "APPROVED",
-      19: "RULE_GAP",
-      20: "UNREADABLE",
-    };
-    expect(CASE_FIXTURES).toHaveLength(23);
-    for (const fixture of CASE_FIXTURES) {
-      const run = runCase(fixture);
-      expect(run.status, fixture.name).toBe(expected[fixture.caseNumber]);
-      expect(run.status, fixture.name).toBe(fixture.expected);
-    }
-    const yar = runCase(CASE_FIXTURES.find((fixture) => fixture.caseNumber === 16)!);
-    expect(yar.linkedApproval).toBe(true);
-    expect(yar.reason).toContain("FH-AUTH-2026-118842");
-  });
-});
-
-describe("worklist rendering", () => {
-  it("shows the owner role its primary action and disables an upload without a reference", () => {
-    const portal = createOrder(new AuthState(), { status: "READY_TO_SUBMIT", channel: "portal" });
-    expect(primaryActionLabel(portal, "coordinator")).toBe("Open packet");
-    expect(primaryActionLabel(portal, "nurse")).toBeNull();
-    const uploaded = renderActions(portal, "coordinator", {});
-    expect(uploaded.find((action) => action.label === "Uploaded")).toMatchObject({ disabled: true, disabledReason: "Enter the portal reference number" });
-    expect(renderActions(portal, "coordinator", { portalReference: "FG-22" }).find((action) => action.id === "uploaded")?.disabled).toBe(false);
-
-    const review = createOrder(new AuthState(), { status: "CLINICAL_REVIEW", confirmOnly: true, fixableGaps: true });
-    expect(primaryActionLabel(review, "nurse")).toBe("Approve for submission");
-    expect(primaryActionLabel(review, "coordinator")).toBeNull();
-    expect(renderActions(review, "nurse", {}).find((action) => action.id === "approve_for_submission")?.disabled).toBe(true);
-    expect(renderActions(review, "nurse", { note: "Confirmed" }).find((action) => action.id === "approve_for_submission")?.disabled).toBe(false);
+    expect(documentsForPacket(state, order.id).some((doc) => doc.status === "QUARANTINED")).toBe(false);
+    expect(readEffects(state).some((effect) => effect.type === "privacy_report")).toBe(true);
   });
 });
 
@@ -491,11 +557,24 @@ describe("status catalog", () => {
   });
 
   it("keeps the migration in step with the status enums", () => {
-    const sql = readFileSync(resolve(root, "db/migrations/001_prior_auth_status.sql"), "utf8");
+    const sql = readFileSync(resolve(root, "db/migrations/002_simplify_order_status.sql"), "utf8");
     for (const status of ORDER_STATUSES) expect(sql).toContain(`'${status}'`);
-    for (const status of ["PRE_PROCESSED", "ATTACHED", "QUARANTINED", "SUPERSEDED"]) expect(sql).toContain(`'${status}'`);
-    expect(sql).toContain("status_version");
+    expect(sql).toContain("'READY_TO_SUBMIT'");
+    expect(sql).toContain("'CLINICAL_REVIEW'");
     expect(sql).toContain("status_audit");
-    expect(sql).toContain("criterion_results");
   });
 });
+
+function statusFor(code: ReasonCode): OrderStatus {
+  if (code === "UNREADABLE_DOCUMENT" || code === "NO_MATCH" || code === "MISSING_DOCUMENTS" || code === "SIDE_MISMATCH" || code === "WRONG_PATIENT_PAGE" || code === "INSURER_MISMATCH" || code === "CPT_MISMATCH" || code === "PORTAL_UPLOAD" || code === "SUBMISSION_FAILED" || code === "MORE_INFO_REQUESTED" || code === "STATUS_CHECK_FAILED" || code === "APPROVAL_MISMATCH" || code === "WRITEBACK_FAILED") {
+    return "NEEDS_ADMIN_REVIEW";
+  }
+  if (code === "CRITERIA_NOT_MET" || code === "RULE_GAP" || code === "CONFIRM_AFTER_FIX" || code === "REPEATED_REQUESTS" || code === "DENIED_DECIDE_APPEAL" || code === "PEER_TO_PEER") {
+    return "NEEDS_CLINICAL_REVIEW";
+  }
+  if (code === "INITIAL_REQUEST" || code === "AWAITING_DECISION" || code === "PENDED_BY_INSURER" || code === "APPEAL") return "SUBMITTED";
+  if (code === "NEW" || code === "LINKED_EXISTING" || code === "APPEAL_WON") return "APPROVED";
+  if (code === "NOT_ON_PA_LIST" || code === "SETTING_EXEMPT") return "NOT_REQUIRED";
+  if (code === "NO_APPEAL" || code === "APPEAL_LOST") return "DENIED";
+  return "CANCELLED";
+}

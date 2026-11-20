@@ -65,10 +65,12 @@ describe("review panel", () => {
   it("follows the live status after a nurse approves Sulu", () => {
     const panel = getReviewPanel("case-3-sulu", "nurse", {
       ...order("case-3-sulu"),
-      status: "ready_to_submit",
+      status: "needs_admin_review",
+      reasonCode: "PORTAL_UPLOAD",
+      detail: { n: 4, insurer: "Andorian Life", k: 1 },
       reason: "Symptoms documented, sending",
     });
-    expect(panel.headline).toBe("Approved for submission; ready to send via portal");
+    expect(panel.headline).toBe("Approved for submission; upload via portal");
     expect(panel.toResolve[0]?.text).toBe("Open the packet and submit it on the portal");
     expect(panel.toResolve[0]?.readOnly).toBe(true);
     expect(panel.toResolve[0]?.owner).toBe("coordinator");
@@ -103,7 +105,7 @@ describe("review panel", () => {
     const panel = getReviewPanel("case-20-odo", "coordinator");
     expect(panel.headline).toBe("Couldn't read this fax: all 4 pages blank");
     expect(checksCardVisible(panel)).toBe(false);
-    expect(panel.toResolve[0]?.action?.label).toBe("Request resend");
+    expect(panel.toResolve[0]?.action?.label).toBe("Request a clean copy");
     expect(panel.toResolve[0]?.contact).toContain("Promenade Urgent Care");
     expect(panel.toResolve[0]?.contact).toContain("555-0148");
     expect(panel.documents[0]?.type).toBe("Blank fax");
@@ -113,7 +115,7 @@ describe("review panel", () => {
     for (const item of SEED_ORDERS) {
       const panel = getReviewPanel(item.id, "coordinator");
       expect(JSON.stringify(panel), item.id).not.toContain("No checks run");
-      if (!isPastCoverage(panel.status, item.blockingChecks ?? [])) continue;
+      if (!isPastCoverage(panel.status, item.blockingChecks ?? [], item.reasonCode)) continue;
       expect(panel.coverage.length, item.id).toBeGreaterThan(0);
       expect(panel.coverage.some((row) => row.found.includes("pipeline error")), item.id).toBe(false);
     }
@@ -121,7 +123,7 @@ describe("review panel", () => {
 
   it("says so when coverage never ran on an order that is past that step", () => {
     const error = vi.spyOn(console, "error").mockImplementation(() => {});
-    const rows = ensureCoverage("READY_TO_SUBMIT", [], [], "case-x");
+    const rows = ensureCoverage("SUBMITTED", [], [], "case-x");
     expect(rows[0]?.found).toBe("Not run: pipeline error");
     expect(error).toHaveBeenCalled();
     error.mockRestore();
@@ -136,6 +138,15 @@ describe("review panel", () => {
         }
       }
     }
+  });
+
+  it("Sisko's deadline skips the weekend and the office-note X-ray counts", () => {
+    const panel = getReviewPanel("case-18-sisko", "coordinator", order("case-18-sisko"));
+    expect(panel.scan.deadline).toBe("Fix by Fri 11/13");
+    const xray = panel.checks.criteria.rows.find((row) => row.id === "prior_xray");
+    expect(xray?.result).toBe("MET");
+    expect(xray?.found ?? "").not.toMatch(/Not checked/);
+    expect(panel.checks.evaluatedAt >= (panel.checks.receivedAt ?? "")).toBe(true);
   });
 
   it("gives every result a text label", () => {

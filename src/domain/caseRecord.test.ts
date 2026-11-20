@@ -6,7 +6,7 @@ describe("case record", () => {
   it("Kirk is cited from the packet and ready to submit", () => {
     const record = buildCaseRecord(SEED_ORDERS.find((o) => o.id === "case-1-kirk")!);
     expect(record.docId).toBe("ORD-58213");
-    expect(record.primaryLabel).toBe("Submit");
+    expect(record.primaryLabel).toBeNull();
     expect(words(record.summary)).toBeLessThanOrEqual(40);
     expect(sentences(record.summary)).toBeLessThanOrEqual(2);
     expect(record.criteria.map((c) => c.status)).toEqual(["met", "met", "met", "met"]);
@@ -28,8 +28,10 @@ describe("case record", () => {
     expect(sulu.primaryLabel).toBe("Review");
     expect(scott.criteria.map((c) => c.status)).toEqual(["met", "unknown", "met", "unknown"]);
     expect(sulu.criteria.map((c) => c.status)).toEqual(["not_met", "not_met", "unknown", "unknown"]);
-    expect(scott.order.status).toBe("awaiting_documents");
-    expect(sulu.order.status).toBe("clinical_review");
+    expect(scott.order.status).toBe("needs_admin_review");
+    expect(scott.order.reasonCode).toBe("MISSING_DOCUMENTS");
+    expect(sulu.order.status).toBe("needs_clinical_review");
+    expect(sulu.order.reasonCode).toBe("CRITERIA_NOT_MET");
   });
 
   it("every case opens a different packet", () => {

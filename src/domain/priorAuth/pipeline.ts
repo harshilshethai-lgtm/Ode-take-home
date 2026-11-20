@@ -1,6 +1,7 @@
-import { decideEvaluating, type EvaluatingInput } from "./decision";
-import { AuthState, createOrder, readAudits, readOrder, transitionOrder } from "./store";
-import type { ApprovalInput, Channel, CriterionResult, OrderSnapshot, OrderStatus } from "./types";
+import { bucketRun, type BucketInput } from "./bucket";
+import type { EvaluatingInput } from "./decision";
+import { AuthState, createOrder, readOrder, transitionOrder } from "./store";
+import type { ApprovalInput, Channel, CriterionResult, OrderStatus, ReasonCode } from "./types";
 
 export interface RuleLookupInput {
   insurer: string | null;
@@ -32,6 +33,9 @@ export interface CaseFixture {
   caseNumber: number;
   name: string;
   expected: OrderStatus;
+  expectedReason: ReasonCode | null;
+  /** Urgent priority. The reason stays INITIAL_REQUEST. */
+  urgent?: boolean;
   channel: Channel | null;
   source: string;
   receivedAt: string;
@@ -44,16 +48,6 @@ export interface CaseFixture {
   approval?: { required: boolean; hasCriteria: boolean; policyId: string; why?: string; policyReference?: string };
   outsideRecord?: string;
   evaluating?: EvaluatingInput;
-}
-
-interface Step {
-  to: OrderStatus;
-  reason: string;
-  checkIds: string[];
-  approval?: ApprovalInput;
-  confirmOnly?: boolean;
-  policyId?: string | null;
-  criterionResults?: CriterionResult[];
 }
 
 const met = (id: string, label: string): CriterionResult => ({
@@ -86,7 +80,37 @@ const unclear = (id: string, label: string): CriterionResult => ({
   evidence: null,
 });
 
-function passed(partial: Partial<CaseFixture> & Pick<CaseFixture, "caseNumber" | "name" | "expected">): CaseFixture {
+const EXPECTED: Record<number, { status: OrderStatus; reason: ReasonCode | null; urgent?: boolean }> = {
+  1: { status: "SUBMITTED", reason: "INITIAL_REQUEST" },
+  2: { status: "NEEDS_ADMIN_REVIEW", reason: "MISSING_DOCUMENTS" },
+  3: { status: "NEEDS_CLINICAL_REVIEW", reason: "CRITERIA_NOT_MET" },
+  4: { status: "SUBMITTED", reason: "INITIAL_REQUEST", urgent: true },
+  5: { status: "NEEDS_ADMIN_REVIEW", reason: "PORTAL_UPLOAD" },
+  6: { status: "NEEDS_CLINICAL_REVIEW", reason: "CRITERIA_NOT_MET" },
+  7: { status: "SUBMITTED", reason: "INITIAL_REQUEST" },
+  8: { status: "NEEDS_CLINICAL_REVIEW", reason: "CRITERIA_NOT_MET" },
+  9: { status: "SUBMITTED", reason: "INITIAL_REQUEST" },
+  10: { status: "NEEDS_CLINICAL_REVIEW", reason: "CRITERIA_NOT_MET" },
+  11: { status: "NOT_REQUIRED", reason: "NOT_ON_PA_LIST" },
+  12: { status: "NEEDS_ADMIN_REVIEW", reason: "MISSING_DOCUMENTS" },
+  13: { status: "NEEDS_ADMIN_REVIEW", reason: "UNREADABLE_DOCUMENT" },
+  14: { status: "NEEDS_ADMIN_REVIEW", reason: "PORTAL_UPLOAD" },
+  15: { status: "NEEDS_ADMIN_REVIEW", reason: "WRONG_PATIENT_PAGE" },
+  16: { status: "APPROVED", reason: "LINKED_EXISTING" },
+  17: { status: "NEEDS_ADMIN_REVIEW", reason: "SIDE_MISMATCH" },
+  18: { status: "NEEDS_ADMIN_REVIEW", reason: "INSURER_MISMATCH" },
+  19: { status: "NEEDS_CLINICAL_REVIEW", reason: "RULE_GAP" },
+  20: { status: "NEEDS_ADMIN_REVIEW", reason: "UNREADABLE_DOCUMENT" },
+  21: { status: "NOT_REQUIRED", reason: "SETTING_EXEMPT" },
+  22: { status: "NEEDS_ADMIN_REVIEW", reason: "PORTAL_UPLOAD" },
+  23: { status: "SUBMITTED", reason: "INITIAL_REQUEST", urgent: true },
+};
+
+function passed(
+  partial: Omit<Partial<CaseFixture>, "expected" | "expectedReason"> & Pick<CaseFixture, "caseNumber" | "name"> & { expected?: string },
+): CaseFixture {
+  const placement = EXPECTED[partial.caseNumber];
+  const { expected: _old, ...rest } = partial;
   return {
     channel: "api",
     source: "Epic",
@@ -98,7 +122,10 @@ function passed(partial: Partial<CaseFixture> & Pick<CaseFixture, "caseNumber" |
     matching: {},
     coverage: { cv1: true },
     approval: { required: true, hasCriteria: true, policyId: "RAD-114" },
-    ...partial,
+    ...rest,
+    expected: placement.status,
+    expectedReason: placement.reason,
+    urgent: placement.urgent,
   };
 }
 
@@ -161,9 +188,12 @@ export const CASE_FIXTURES: CaseFixture[] = [
   passed({
     caseNumber: 13,
     name: "La Forge",
-    expected: "AWAITING_DOCUMENTS",
     channel: null,
-    evaluating: ready([unclear("therapy", "PT summary dates illegible"), { ...met("member", "Member id"), confidence: 0.4 }]),
+    insurer: "",
+    cpt: "",
+    preprocessing: { identityAndOrderUnreadable: true, unreadableFields: "therapy, imaging, member id", faxSender: "the clinic" },
+    approval: undefined,
+    coverage: undefined,
   }),
   passed({ caseNumber: 14, name: "Worf", expected: "READY_TO_SUBMIT", channel: "portal", insurer: "Andorian Life", cpt: "73221", approval: { required: true, hasCriteria: true, policyId: "IMG-330" }, evaluating: ready([waived("tx", "Dislocation on November 8")]) }),
   passed({ caseNumber: 15, name: "Nog", expected: "NEEDS_CORRECTION", matching: { ma3: false, detail: "Page 3 is for another patient (ROM, DOB 01/11/1975); quarantined" } }),
@@ -193,134 +223,112 @@ export const CASE_FIXTURES: CaseFixture[] = [
 
 export interface CaseRun {
   status: OrderStatus;
-  reason: string;
+  reason: ReasonCode | null;
   linkedApproval: boolean;
   confirmOnly: boolean;
+  urgent: boolean;
 }
 
-/** Walks automatic transitions until a person, a closed status, or Ready to submit. */
+/** Runs the pipeline once and applies the single bucket decision. */
 export function runCase(fixture: CaseFixture, now = new Date("2026-11-09T16:00:00")): CaseRun {
   const state = new AuthState();
-  const created = createOrder(state, { channel: fixture.channel, now });
-  for (let step = 0; step < 12; step += 1) {
-    const current = readOrder(state, created.id);
-    const next = nextAutomatic(current, fixture);
-    if (!next) break;
-    transitionOrder(state, created.id, next.to, {
+  const created = createOrder(state, { channel: fixture.channel, status: "PROCESSING", step: "INTAKE", now });
+  const decision = bucketRun(fixtureBucket(fixture));
+  if (decision.status !== "PROCESSING") {
+    transitionOrder(state, created.id, decision.status, {
       actor: { kind: "system" },
-      expectedVersion: current.statusVersion,
-      reason: next.reason,
-      checkIds: next.checkIds,
-      approval: next.approval,
-      confirmOnly: next.confirmOnly,
-      policyId: next.policyId,
-      criterionResults: next.criterionResults,
+      expectedVersion: created.statusVersion,
+      reason: decision.reason,
+      step: decision.step,
+      detail: decision.detail,
+      otherIssues: decision.otherIssues,
+      checkIds: decision.checkIds,
+      approval: decision.reason === "LINKED_EXISTING" && fixture.coverage?.existingApproval ? { ...fixture.coverage.existingApproval, linked: true } : undefined,
+      policyId: fixture.approval?.policyId ?? null,
       now,
     });
   }
   const order = readOrder(state, created.id);
-  const audits = readAudits(state, { orderId: created.id });
   return {
     status: order.status,
-    reason: audits.at(-1)?.reason ?? "",
+    reason: order.reason,
     linkedApproval: order.linkedApproval,
     confirmOnly: order.confirmOnly,
+    urgent: fixture.urgent === true,
   };
 }
 
-function nextAutomatic(order: OrderSnapshot, fixture: CaseFixture): Step | null {
-  switch (order.status) {
-    case "RECEIVED":
-      return { to: "PRE_PROCESSING", reason: `Checking ${fixture.pageCount} pages`, checkIds: [] };
-    case "PRE_PROCESSING":
-      return leavePreprocessing(fixture);
-    case "MATCHING":
-      return leaveMatching(fixture);
-    case "COVERAGE_CHECK":
-      return leaveCoverage(fixture);
-    case "APPROVAL_CHECK":
-      return leaveApproval(fixture);
-    case "COLLECTING_EVIDENCE":
-      return leaveCollecting(fixture);
-    case "EVALUATING":
-      return leaveEvaluating(order, fixture);
-    default:
-      return null;
-  }
-}
-
-function leavePreprocessing(fixture: CaseFixture): Step {
+function fixtureBucket(fixture: CaseFixture): BucketInput {
   const pre = fixture.preprocessing ?? {};
-  if (pre.allPagesBlank) {
+  if (pre.allPagesBlank || pre.identityAndOrderUnreadable) {
     const sender = [pre.faxSender, pre.faxNumber].filter(Boolean).join(" ");
-    return { to: "UNREADABLE", reason: `All ${fixture.pageCount} pages blank. Sender: ${sender}`, checkIds: ["PP-2"] };
-  }
-  if (pre.identityAndOrderUnreadable) {
-    return { to: "UNREADABLE", reason: `Unreadable: ${pre.unreadableFields ?? "patient and order"}`, checkIds: ["PP-5"] };
-  }
-  return { to: "MATCHING", reason: "Matching to patient and order", checkIds: ["PP-2", "PP-3", "PP-5"] };
-}
-
-function leaveMatching(fixture: CaseFixture): Step {
-  const matching = fixture.matching ?? {};
-  if (matching.ma3 === false) {
-    return { to: "NEEDS_CORRECTION", reason: matching.detail ?? "A page is for another patient; quarantined", checkIds: ["MA-3"] };
-  }
-  if (matching.ma1 === false || matching.ma2 === false) {
-    const failed = matching.ma1 === false ? "MA-1" : "MA-2";
-    return { to: "UNMATCHED", reason: `No match for ${matching.name ?? "unknown"}, DOB ${matching.dob ?? "?"}`, checkIds: [failed] };
-  }
-  return { to: "COVERAGE_CHECK", reason: "Checking eligibility and approvals on file", checkIds: ["MA-1", "MA-2", "MA-3"] };
-}
-
-function leaveCoverage(fixture: CaseFixture): Step {
-  const coverage = fixture.coverage ?? { cv1: true };
-  if (coverage.cv1 === false) {
-    return { to: "NEEDS_CORRECTION", reason: coverage.detail ?? "Eligibility does not match the scan date", checkIds: ["CV-1"] };
-  }
-  if (coverage.existingApproval) {
-    return { to: "APPROVED", reason: "Linked existing approval", checkIds: ["CV-2"], approval: { ...coverage.existingApproval, linked: true } };
-  }
-  return { to: "APPROVAL_CHECK", reason: `Looking up ${fixture.insurer || "insurer"} rules for CPT ${fixture.cpt || "unknown"}`, checkIds: [] };
-}
-
-function leaveApproval(fixture: CaseFixture): Step {
-  const approval = fixture.approval ?? stubRuleEngine({ insurer: fixture.insurer, plan: null, cpt: fixture.cpt, setting: null });
-  const required = "approvalRequired" in approval ? approval.approvalRequired : approval.required;
-  const policyId = approval.policyId;
-  if (!required) {
-    const why = "why" in approval ? approval.why : null;
-    return { to: "NOT_REQUIRED", reason: `Not required: ${policyId ?? "policy"} (${why ?? "not on the PA list"})`, checkIds: [], policyId };
-  }
-  const hasCriteria = "hasCriteria" in approval ? approval.hasCriteria : approval.criteria != null;
-  if (!hasCriteria) {
-    const reference = "policyReference" in approval ? approval.policyReference : undefined;
     return {
-      to: "RULE_GAP",
-      reason: `${fixture.insurer || "Insurer"} requires approval for ${fixture.cpt || "this study"}; no criteria in library${reference ? ` (${reference})` : ""}`,
-      checkIds: [],
+      unreadable: {
+        document: "the fax",
+        problem: pre.allPagesBlank ? "all pages blank" : `fields: ${pre.unreadableFields ?? "patient and order"}`,
+        sender: sender || "the sender",
+      },
     };
   }
-  return { to: "COLLECTING_EVIDENCE", reason: "Pulling records and extracting evidence", checkIds: [] };
-}
 
-function leaveCollecting(fixture: CaseFixture): Step {
-  if (fixture.outsideRecord) {
-    return { to: "AWAITING_DOCUMENTS", reason: fixture.outsideRecord, checkIds: ["EV-2"] };
+  const matching = fixture.matching ?? {};
+  if (matching.ma1 === false || matching.ma2 === false) {
+    return {
+      noMatch: { name: matching.name ?? "unknown", dob: matching.dob ?? "unknown", mrn: "none", candidates: matching.detail ?? "none" },
+    };
   }
-  const count = fixture.evaluating?.criteria.length ?? 0;
-  const policyId = fixture.approval?.policyId ?? "policy";
-  return { to: "EVALUATING", reason: `Checking ${count} criteria against ${policyId}`, checkIds: [] };
-}
 
-function leaveEvaluating(order: OrderSnapshot, fixture: CaseFixture): Step {
-  if (!fixture.evaluating) throw new Error(`Case ${fixture.caseNumber} ${fixture.name} reached Evaluating without criteria`);
-  const decision = decideEvaluating({ ...fixture.evaluating, priorAwaitingDocumentsEntries: order.awaitingDocumentsEntries });
+  const coverage = fixture.coverage;
+  const approval = fixture.approval;
+  const why = approval && "why" in approval ? approval.why : undefined;
+  const evaluating = fixture.evaluating;
+  const failures = [...(evaluating?.consistencyFailures ?? [])];
+  if (matching.ma3 === false) failures.push({ id: "MA-3", detail: matching.detail ?? "A page is for another patient" });
+
   return {
-    to: decision.status,
-    reason: decision.reason,
-    checkIds: decision.checkIds,
-    confirmOnly: decision.confirmOnly,
-    criterionResults: fixture.evaluating.criteria,
+    criteria: evaluating?.criteria,
+    confidenceThreshold: evaluating?.confidenceThreshold ?? 0.85,
+    consistencyFailures: failures,
+    pageIssues: evaluating?.pageIssues,
+    insurerMatches: coverage ? coverage.cv1 !== false : undefined,
+    insurerMismatch: coverage?.cv1 === false ? insurerDetail(coverage.detail) : undefined,
+    existingApproval: coverage?.existingApproval ? { ...coverage.existingApproval, linked: true } : null,
+    approvalRequired: approval?.required,
+    hasCriteria: approval?.hasCriteria,
+    notRequiredReason: notRequiredReason(why),
+    notRequiredDetail: {
+      cpt: fixture.cpt || "this study",
+      insurer: fixture.insurer || "the insurer",
+      setting: /inpatient/i.test(why ?? "") ? "Inpatient" : "Outpatient",
+    },
+    ruleGapDetail: { insurer: fixture.insurer || "The insurer", cpt: fixture.cpt || "this study" },
+    channel: fixture.channel,
+    insurer: fixture.insurer,
+    cpt: fixture.cpt,
+    policyId: approval?.policyId,
+    attachmentCount: fixture.pageCount,
+    priorMissingDocumentsEntries: evaluating?.priorAwaitingDocumentsEntries,
+    coordinatorFix: evaluating?.coordinatorFixSinceApprovalCheck,
+    resolvedItem: evaluating?.resolvedItem,
+    previousCriteria: evaluating?.previousCriteria,
+    fixedCriterionIds: evaluating?.fixedCriterionIds,
+    routingPolicy: evaluating?.routingPolicy,
+    routingContext: evaluating?.routingContext,
+    requestedItems: evaluating?.requestedItems,
   };
 }
+
+function notRequiredReason(why: string | undefined): "NOT_ON_PA_LIST" | "SETTING_EXEMPT" {
+  return why != null && /\binpatient\b/i.test(why) ? "SETTING_EXEMPT" : "NOT_ON_PA_LIST";
+}
+
+function insurerDetail(text: string | undefined): BucketInput["insurerMismatch"] {
+  return {
+    insurerA: "Federation Health",
+    source: text?.includes("card") ? "card scanned Nov 9" : "eligibility check",
+    insurerB: "Bajoran Health Plan",
+    date: "Nov 1",
+    note: text ?? "",
+  };
+}
+
