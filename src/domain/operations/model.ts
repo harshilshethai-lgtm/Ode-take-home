@@ -15,6 +15,7 @@ import { MATCHED_BASELINE, THROUGHPUT, type ThroughputCase } from "@/data/operat
 import { INSURER_TURNAROUND_HOURS } from "@/domain/timeRisk";
 import { isClosed, STATUSES, type StatusId } from "@/domain/statuses";
 import type { Order } from "@/domain/types";
+import { isWaitingOnDocuments } from "@/domain/priorAuth/render";
 import { computeTimeRisk } from "@/domain/timeRisk";
 import { ageBucket, businessHoursBetween, addBusinessHours, fmtBusiness } from "@/domain/operations/time";
 
@@ -222,10 +223,11 @@ export function earliestDue(order: Order): Date | null {
 
 export function isPastDue(order: Order, now: Date = NOW): boolean {
   if (isClosed(order.status)) return false;
-  const task = taskDue(order);
   const submitBy = latestSubmitAt(order);
-  if (task && now.getTime() > task.getTime()) return true;
   if (submitBy && now.getTime() > submitBy.getTime()) return true;
+  if (isWaitingOnDocuments(order.reasonCode, order.followUpDueAt, now)) return false;
+  const task = taskDue(order);
+  if (task && now.getTime() > task.getTime()) return true;
   return false;
 }
 
@@ -288,17 +290,18 @@ function queueRows(orders: Order[], scope: OperationsScope, now: Date): QueueRow
     const buckets: [number, number, number] = [0, 0, 0];
     let oldest: number | null = null;
     let pastDue = 0;
-    const reasonCounts = new Map<StatusId, number>();
+    const reasonCounts = new Map<string, number>();
     for (const order of rows) {
       const age = businessHoursBetween(new Date(order.statusSince), now);
       buckets[ageBucket(age)] += 1;
       oldest = oldest == null ? age : Math.max(oldest, age);
       if (isPastDue(order, now)) pastDue += 1;
-      reasonCounts.set(order.status, (reasonCounts.get(order.status) ?? 0) + 1);
+      if (order.reasonCode) reasonCounts.set(order.reasonCode, (reasonCounts.get(order.reasonCode) ?? 0) + 1);
     }
-    const reasons = REASON_ORDER.filter((status) => REASON_LABEL[status] && (reasonCounts.get(status) ?? 0) > 0).map(
-      (status) => ({ label: REASON_LABEL[status]!, count: reasonCounts.get(status)! }),
-    );
+    const reasons = REASON_ORDER.filter((code) => REASON_LABEL[code] && (reasonCounts.get(code) ?? 0) > 0).map((code) => ({
+      label: REASON_LABEL[code]!,
+      count: reasonCounts.get(code)!,
+    }));
     return {
       id: owner.id,
       name: owner.name,

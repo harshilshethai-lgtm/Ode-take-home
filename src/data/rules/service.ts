@@ -793,9 +793,11 @@ export function createRulesApi(store: RulesStore, opts: ApiOptions) {
         reason: `${kind === "added" ? "New" : "Changed"} in v${stale.applicable.versionNumber}. Check it against the chart again.`,
       };
     });
+    const stamped = opts.now();
+    const createdAt = e.createdAt >= stamped ? new Date(Date.parse(e.createdAt) + 1000).toISOString() : stamped;
     return mutate((dd) => {
       const version = dd.versions.find((v) => v.id === stale.applicable.id)!;
-      return insertRecorded(dd, version, { orderRef: e.orderRef, patientRef: e.patientRef, cptCode: e.cptCode, planType: e.planType, serviceDate: e.serviceDate, results }, actor);
+      return insertRecorded(dd, version, { orderRef: e.orderRef, patientRef: e.patientRef, cptCode: e.cptCode, planType: e.planType, serviceDate: e.serviceDate, createdAt, results }, actor);
     });
   }
 

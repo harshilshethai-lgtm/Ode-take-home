@@ -1,3 +1,5 @@
+import { reasonChip } from "@/domain/priorAuth/reasons";
+import type { ReasonCode } from "@/domain/priorAuth/types";
 import type { Channel, StatusId } from "@/domain/statuses";
 
 /** Where an open case sits on the operations snapshot. */
@@ -31,68 +33,46 @@ export function autonomyFor(insurer: string | null, channel: Channel | null): Au
   return "preview";
 }
 
-const PIPELINE = new Set<StatusId>([
-  "received",
-  "pre_processing",
-  "matching",
-  "coverage_check",
-  "approval_check",
-  "collecting_evidence",
-  "evaluating",
-]);
+const DONE = new Set<StatusId>(["approved", "not_required", "denied", "cancelled"]);
 
-/** Paperwork. Ready to submit for a non-automatic insurer is added in queueOwner. */
-const COORDINATOR = new Set<StatusId>([
-  "unreadable",
-  "unmatched",
-  "awaiting_documents",
-  "needs_correction",
-  "rule_gap",
-  "more_info_requested",
-]);
-
-const NURSE = new Set<StatusId>(["clinical_review", "denied", "appeal"]);
-
-const DONE = new Set<StatusId>(["approved", "not_required", "closed_denied", "cancelled"]);
-
-/**
- * Status → owner. Ready to submit is AI for automatic insurers and Coordinator otherwise.
- * Rule gap is Coordinator here (no matching rule), even though the nurse queue still lists it.
- */
-export function queueOwner(status: StatusId, autonomy: Autonomy): QueueOwner | "done" {
+/** Status → owner. Portal upload is a coordinator task. Submitted stays with the insurer. */
+export function queueOwner(status: StatusId, _autonomy: Autonomy): QueueOwner | "done" {
   if (DONE.has(status)) return "done";
   if (status === "submitted") return "insurer";
-  if (status === "ready_to_submit") return autonomy === "automatic" ? "ai" : "coordinator";
-  if (NURSE.has(status)) return "nurse";
-  if (COORDINATOR.has(status)) return "coordinator";
-  if (PIPELINE.has(status)) return "ai";
+  if (status === "needs_clinical_review") return "nurse";
+  if (status === "needs_admin_review") return "coordinator";
+  if (status === "processing") return "ai";
   throw new Error(`No operations owner for status ${status}`);
 }
 
-/** Grey reason line under an owner row. Ready to submit is counted on the row and not repeated here. */
-export const REASON_LABEL: Partial<Record<StatusId, string>> = {
-  awaiting_documents: "Awaiting documents",
-  needs_correction: "Needs correction",
-  unreadable: "Unreadable",
-  unmatched: "Unmatched",
-  rule_gap: "No matching rule",
-  more_info_requested: "More info requested",
-  clinical_review: "Clinical review",
-  denied: "Denied",
-  appeal: "Appeal",
-};
-
-export const REASON_ORDER: StatusId[] = [
-  "awaiting_documents",
-  "needs_correction",
-  "unreadable",
-  "unmatched",
-  "rule_gap",
-  "more_info_requested",
-  "clinical_review",
-  "denied",
-  "appeal",
+/** Grey reason line under an owner row, in chip order. */
+export const REASON_ORDER: ReasonCode[] = [
+  "MISSING_DOCUMENTS",
+  "UNREADABLE_DOCUMENT",
+  "NO_MATCH",
+  "SIDE_MISMATCH",
+  "WRONG_PATIENT_PAGE",
+  "INSURER_MISMATCH",
+  "CPT_MISMATCH",
+  "PORTAL_UPLOAD",
+  "SUBMISSION_FAILED",
+  "MORE_INFO_REQUESTED",
+  "STATUS_CHECK_FAILED",
+  "APPROVAL_MISMATCH",
+  "WRITEBACK_FAILED",
+  "CRITERIA_NOT_MET",
+  "RULE_GAP",
+  "CONFIRM_AFTER_FIX",
+  "REPEATED_REQUESTS",
+  "DENIED_DECIDE_APPEAL",
+  "PEER_TO_PEER",
+  "INITIAL_REQUEST",
+  "AWAITING_DECISION",
+  "PENDED_BY_INSURER",
+  "APPEAL",
 ];
+
+export const REASON_LABEL: Partial<Record<ReasonCode, string>> = Object.fromEntries(REASON_ORDER.map((code) => [code, reasonChip(code)]));
 
 export interface OwnerDef {
   id: QueueOwner;
@@ -104,18 +84,17 @@ export const OWNERS: OwnerDef[] = [
   {
     id: "ai",
     name: "AI processing",
-    definition: "Orders the pipeline is still reading, and packets ready to send for an automatic insurer.",
+    definition: "Orders the pipeline is still reading. A run that sits here is a bug, not a task.",
   },
   {
     id: "coordinator",
     name: "Coordinator",
-    definition:
-      "Awaiting documents, needs correction, unreadable, no matching rule, and ready to submit for an assisted insurer.",
+    definition: "Unreadable packets, missing documents, corrections, and portal uploads.",
   },
   {
     id: "nurse",
     name: "Nurse",
-    definition: "Clinical review, spot-check, and denied.",
+    definition: "Criteria that are not met, rule gaps, and denials waiting on a decision.",
   },
   {
     id: "insurer",
@@ -127,5 +106,6 @@ export const OWNERS: OwnerDef[] = [
 export const DONE_PARTS: { label: string; statuses: StatusId[] }[] = [
   { label: "approved", statuses: ["approved"] },
   { label: "not required", statuses: ["not_required"] },
-  { label: "closed", statuses: ["closed_denied", "cancelled"] },
+  { label: "denied", statuses: ["denied"] },
+  { label: "cancelled", statuses: ["cancelled"] },
 ];

@@ -1,4 +1,5 @@
 import {
+  AlarmClock,
   CalendarX,
   Clock,
   CreditCard,
@@ -16,6 +17,7 @@ import { Tip } from "./tooltip";
 const FLAG_ICON: Record<FlagId, LucideIcon> = {
   safety: ShieldAlert,
   slot_at_risk: CalendarX,
+  scan_at_risk: AlarmClock,
   urgent: Siren,
   rule_violation: FileX,
   coverage: CreditCard,

@@ -1,12 +1,6 @@
-import {
-  AWAITING_LOOP_LIMIT,
-  CLOSED_DOCUMENT_STATUSES,
-  DEFAULT_FOLLOW_UP,
-  correctionDestination,
-  isLegalDocumentTransition,
-  isLegalOrderTransition,
-  ownerRole,
-} from "./catalog";
+import { CLOSED_DOCUMENT_STATUSES, DEFAULT_FOLLOW_UP, isLegalDocumentTransition, isLegalOrderTransition, resumeStepFor } from "./catalog";
+import { explainReason, reasonChip, reasonFits, stepProgress } from "./reasons";
+import { unfilledPlaceholders } from "./summary";
 import type {
   Actor,
   ApprovalInput,
@@ -18,6 +12,10 @@ import type {
   Effect,
   OrderSnapshot,
   OrderStatus,
+  OtherIssue,
+  ProcessingStep,
+  ReasonCode,
+  ReasonDetail,
   TransitionContext,
 } from "./types";
 import { IllegalTransitionError, StaleVersionError, TransitionDeniedError } from "./types";
@@ -35,7 +33,7 @@ interface Internal {
 
 const internals = new WeakMap<AuthState, Internal>();
 
-/** In-memory stand-in for the status tables. Status columns are written only by the transition functions. */
+/** In-memory stand-in for the status tables. The status column is written only by transitionOrder. */
 export class AuthState {
   constructor() {
     internals.set(this, { orders: new Map(), documents: new Map(), audits: [], effects: [], seq: 1 });
@@ -61,29 +59,46 @@ export function createOrder(
     id?: string;
     status?: OrderStatus;
     channel?: Channel | null;
-    blockingChecks?: string[];
-    fixableGaps?: boolean;
-    awaitingDocumentsEntries?: number;
+    reason?: ReasonCode | null;
+    step?: ProcessingStep | null;
+    detail?: ReasonDetail;
+    otherIssues?: OtherIssue[];
+    missingDocumentsEntries?: number;
+    submissionAttempts?: number;
     confirmOnly?: boolean;
     linkedApproval?: boolean;
     approval?: ApprovalInput | null;
+    blockingChecks?: string[];
+    fixableGaps?: boolean;
+    scanCompleted?: boolean;
     now?: Date;
   } = {},
 ): OrderSnapshot {
   const data = db(state);
-  const now = (input.now ?? new Date()).toISOString();
+  const status = input.status ?? "PROCESSING";
+  const reason = input.reason === undefined ? (status === "PROCESSING" ? null : null) : input.reason;
+  if (!reasonFits(status, reason)) {
+    throw new TransitionDeniedError(`Reason ${reason ?? "none"} is not valid for ${status}`);
+  }
   const order: OrderData = {
     id: input.id ?? nextId(state, "ord"),
-    status: input.status ?? "RECEIVED",
+    status,
     statusVersion: 1,
     channel: input.channel ?? null,
-    blockingChecks: [...(input.blockingChecks ?? [])],
-    fixableGaps: input.fixableGaps ?? false,
-    awaitingDocumentsEntries: input.awaitingDocumentsEntries ?? 0,
-    confirmOnly: input.confirmOnly ?? false,
-    linkedApproval: input.linkedApproval ?? false,
+    reason,
+    step: status === "PROCESSING" ? (input.step ?? "INTAKE") : null,
+    detail: { ...(input.detail ?? {}) },
+    otherIssues: (input.otherIssues ?? []).map(copyIssue),
+    missingDocumentsEntries: input.missingDocumentsEntries ?? 0,
+    resumeStep: null,
+    submissionAttempts: input.submissionAttempts ?? 0,
+    confirmOnly: input.confirmOnly ?? reason === "CONFIRM_AFTER_FIX",
+    linkedApproval: input.linkedApproval ?? reason === "LINKED_EXISTING",
     approval: input.approval ? { ...input.approval } : null,
-    createdAt: now,
+    blockingChecks: [...(input.blockingChecks ?? checksFor(reason))],
+    fixableGaps: input.fixableGaps ?? false,
+    scanCompleted: input.scanCompleted ?? false,
+    createdAt: (input.now ?? new Date()).toISOString(),
   };
   data.orders.set(order.id, order);
   return copyOrder(order);
@@ -141,17 +156,17 @@ export function documentsForPacket(state: AuthState, orderId: string): DocumentS
   return documentsForOrder(state, orderId).filter((doc) => doc.status === "ATTACHED");
 }
 
-/** Time in status comes from the latest audit row, not a stored duration. */
+/** Time in status comes from the latest audit row that changed status, not a stored duration. */
 export function timeInStatusMs(state: AuthState, orderId: string, now: Date): number {
   const order = mustOrder(state, orderId);
-  const audits = db(state).audits.filter((row) => row.orderId === orderId);
+  const audits = db(state).audits.filter((row) => row.orderId === orderId && row.fromStatus !== row.toStatus);
   const at = audits.length > 0 ? audits[audits.length - 1].at : order.createdAt;
   return Math.max(0, now.getTime() - new Date(at).getTime());
 }
 
 /**
- * The only way to change an order's status. Illegal moves throw IllegalTransitionError.
- * A stale status version throws StaleVersionError before any other check.
+ * The only way to change an order's status.
+ * A stale status version throws before any other check. An illegal pair throws IllegalTransitionError.
  */
 export function transitionOrder(state: AuthState, orderId: string, to: OrderStatus, ctx: TransitionContext): OrderSnapshot {
   const order = mustOrder(state, orderId);
@@ -161,27 +176,38 @@ export function transitionOrder(state: AuthState, orderId: string, to: OrderStat
   if (!isLegalOrderTransition(order.status, to)) {
     throw new IllegalTransitionError(order.status, to);
   }
-  if (to === "AWAITING_DOCUMENTS" && order.awaitingDocumentsEntries >= AWAITING_LOOP_LIMIT) {
-    throw new TransitionDeniedError("Documents have been requested 3 times; the order goes to clinical review");
+  if (!reasonFits(to, ctx.reason)) {
+    throw new TransitionDeniedError(`Reason ${ctx.reason ?? "none"} is not valid for ${to}`);
+  }
+  if (to === "PROCESSING" && !ctx.step) {
+    throw new TransitionDeniedError("Processing needs a step");
   }
 
   assertOrderActor(order, to, ctx);
   assertOrderConditions(order, to, ctx);
 
   const from = order.status;
+  const previousReason = order.reason;
   const at = (ctx.now ?? new Date()).toISOString();
+  const detail = { ...(ctx.detail ?? {}) };
   order.status = to;
   order.statusVersion += 1;
-  if (to === "CLINICAL_REVIEW") order.confirmOnly = ctx.confirmOnly === true;
-  else order.confirmOnly = false;
-  if (to === "NEEDS_CORRECTION") order.blockingChecks = [...(ctx.checkIds ?? [])];
-  if (to === "AWAITING_DOCUMENTS") order.awaitingDocumentsEntries += 1;
+  order.reason = ctx.reason;
+  order.step = to === "PROCESSING" ? (ctx.step ?? "INTAKE") : null;
+  order.detail = detail;
+  order.otherIssues = (ctx.otherIssues ?? []).map(copyIssue);
+  order.confirmOnly = ctx.reason === "CONFIRM_AFTER_FIX";
+  order.blockingChecks = [...(ctx.checkIds ?? checksFor(ctx.reason))];
+  order.fixableGaps = ctx.fixableGaps === true || (ctx.otherIssues ?? []).some((issue) => issue.code === "MISSING_DOCUMENTS");
+  order.resumeStep = to === "PROCESSING" ? (ctx.step ?? resumeStepFor(previousReason)) : null;
+  if (ctx.reason === "MISSING_DOCUMENTS") order.missingDocumentsEntries += 1;
+  if (ctx.reason === "SUBMISSION_FAILED") order.submissionAttempts = Math.max(order.submissionAttempts, 3);
   if (to === "APPROVED" && ctx.approval) {
     order.approval = { ...ctx.approval };
-    order.linkedApproval = ctx.approval.linked === true;
+    order.linkedApproval = ctx.approval.linked === true || ctx.reason === "LINKED_EXISTING";
   }
 
-  const reason = formatReason(to, ctx);
+  const sentence = sentenceFor(to, ctx.reason, ctx.step ?? null, detail);
   writeAudit(state, {
     orderId: order.id,
     documentId: null,
@@ -189,21 +215,110 @@ export function transitionOrder(state: AuthState, orderId: string, to: OrderStat
     toStatus: to,
     actor: actorId(ctx.actor),
     at,
-    reason,
+    reason: sentence,
+    reasonCode: ctx.reason,
+    step: order.step,
     checkIds: [...(ctx.checkIds ?? [])],
     criterionResults: ctx.criterionResults ? ctx.criterionResults.map(copyCriterion) : null,
     evidenceRefs: (ctx.evidenceRefs ?? []).map((ref) => ({ ...ref })),
     ruleVersion: ctx.ruleVersion ?? null,
     routingPolicyVersion: ctx.routingPolicyVersion ?? null,
   });
-  recordOrderEffects(state, order, to, ctx, reason);
+  recordOrderEffects(state, order, ctx, sentence);
   return copyOrder(order);
 }
 
 /**
- * The only way to change a document's status.
- * Attaching a document restarts an order that is waiting on paperwork.
+ * Updates the reason without leaving the status. Used while Submitted, where the
+ * insurer's answer changes the reason and the status stays put.
  */
+export function applyReason(state: AuthState, orderId: string, ctx: TransitionContext): OrderSnapshot {
+  const order = mustOrder(state, orderId);
+  if (order.statusVersion !== ctx.expectedVersion) throw new StaleVersionError(ctx.expectedVersion, order.statusVersion);
+  if (order.status === "PROCESSING" || !ctx.reason || !reasonFits(order.status, ctx.reason)) {
+    throw new TransitionDeniedError(`Reason ${ctx.reason ?? "none"} is not valid for ${order.status}`);
+  }
+  assertReasonActor(order, ctx);
+  const at = (ctx.now ?? new Date()).toISOString();
+  const detail = { ...(ctx.detail ?? {}) };
+  order.statusVersion += 1;
+  order.reason = ctx.reason;
+  order.detail = detail;
+  order.otherIssues = (ctx.otherIssues ?? order.otherIssues).map(copyIssue);
+  order.confirmOnly = ctx.reason === "CONFIRM_AFTER_FIX";
+  order.blockingChecks = [...(ctx.checkIds ?? checksFor(ctx.reason))];
+  writeAudit(state, {
+    orderId: order.id,
+    documentId: null,
+    fromStatus: order.status,
+    toStatus: order.status,
+    actor: actorId(ctx.actor),
+    at,
+    reason: sentenceFor(order.status, ctx.reason, null, detail),
+    reasonCode: ctx.reason,
+    step: null,
+    checkIds: [...(ctx.checkIds ?? [])],
+    criterionResults: null,
+    evidenceRefs: [],
+    ruleVersion: null,
+    routingPolicyVersion: null,
+  });
+  recordOrderEffects(state, order, ctx, sentenceFor(order.status, ctx.reason, null, detail));
+  return copyOrder(order);
+}
+
+/** Epic reported the scan. APPROVED can no longer return to the pipeline. */
+export function markScanCompleted(state: AuthState, orderId: string, now?: Date): OrderSnapshot {
+  const order = mustOrder(state, orderId);
+  order.scanCompleted = true;
+  order.statusVersion += 1;
+  writeAudit(state, {
+    orderId: order.id,
+    documentId: null,
+    fromStatus: order.status,
+    toStatus: order.status,
+    actor: "system",
+    at: (now ?? new Date()).toISOString(),
+    reason: "Scan completed",
+    reasonCode: order.reason,
+    step: null,
+    checkIds: [],
+    criterionResults: null,
+    evidenceRefs: [],
+    ruleVersion: null,
+    routingPolicyVersion: null,
+  });
+  return copyOrder(order);
+}
+
+/** Moves the progress text without changing the status column. */
+export function advanceProcessingStep(state: AuthState, orderId: string, step: ProcessingStep, ctx: Pick<TransitionContext, "actor" | "detail" | "now">): OrderSnapshot {
+  const order = mustOrder(state, orderId);
+  if (order.status !== "PROCESSING") {
+    throw new IllegalTransitionError(order.status, "PROCESSING");
+  }
+  const at = (ctx.now ?? new Date()).toISOString();
+  order.step = step;
+  order.detail = { ...order.detail, ...(ctx.detail ?? {}) };
+  writeAudit(state, {
+    orderId: order.id,
+    documentId: null,
+    fromStatus: "PROCESSING",
+    toStatus: "PROCESSING",
+    actor: actorId(ctx.actor),
+    at,
+    reason: stepProgress(step, order.detail),
+    reasonCode: null,
+    step,
+    checkIds: [],
+    criterionResults: null,
+    evidenceRefs: [],
+    ruleVersion: null,
+    routingPolicyVersion: null,
+  });
+  return copyOrder(order);
+}
+
 export function transitionDocument(state: AuthState, docId: string, to: DocumentStatus, ctx: TransitionContext): DocumentSnapshot {
   const doc = mustDocument(state, docId);
   if (doc.statusVersion !== ctx.expectedVersion) {
@@ -226,7 +341,9 @@ export function transitionDocument(state: AuthState, docId: string, to: Document
     toStatus: to,
     actor: actorId(ctx.actor),
     at,
-    reason: ctx.reason,
+    reason: ctx.note || (ctx.reason ? reasonChip(ctx.reason) : "Document updated"),
+    reasonCode: ctx.reason,
+    step: null,
     checkIds: [...(ctx.checkIds ?? [])],
     criterionResults: null,
     evidenceRefs: (ctx.evidenceRefs ?? []).map((ref) => ({ ...ref })),
@@ -237,18 +354,10 @@ export function transitionDocument(state: AuthState, docId: string, to: Document
   if (to === "QUARANTINED") {
     db(state).effects.push({ type: "privacy_report", documentId: doc.id, orderId: doc.orderId });
   }
-
-  if (to === "ATTACHED" && doc.orderId) {
-    restartOrderForAttachment(state, doc.orderId, ctx);
-  }
-
+  if (to === "ATTACHED" && doc.orderId) restartForAttachment(state, doc.orderId, ctx);
   return copyDocument(doc);
 }
 
-/**
- * One page that fails MA-3 becomes its own quarantined document.
- * The rest of the fax keeps its status and can still be attached.
- */
 export function splitAndQuarantine(
   state: AuthState,
   docId: string,
@@ -266,7 +375,7 @@ export function splitAndQuarantine(
     const quarantined = transitionDocument(state, parent.id, "QUARANTINED", {
       ...ctx,
       checkIds: ctx.checkIds ?? ["MA-3"],
-      reason: ctx.reason || `Page ${pageNumber} is for another patient; quarantined`,
+      note: ctx.note || `Page ${pageNumber} is for another patient; quarantined`,
     });
     return { quarantined, remainder: null };
   }
@@ -282,16 +391,15 @@ export function splitAndQuarantine(
   const quarantined = transitionDocument(state, child.id, "QUARANTINED", {
     actor: { kind: "system" },
     expectedVersion: 1,
-    reason: ctx.reason || `Page ${pageNumber} is for another patient; quarantined`,
+    reason: null,
+    note: ctx.note || `Page ${pageNumber} is for another patient; quarantined`,
     checkIds: ctx.checkIds ?? ["MA-3"],
     now: ctx.now,
   });
   return { quarantined, remainder: copyDocument(parent) };
 }
 
-/**
- * Wrong-patient page: quarantine that page, and move the order from Matching to Needs correction.
- */
+/** Wrong-patient page: quarantine that page and send the order to admin review. The order must be Processing. */
 export function quarantineWrongPatientPage(
   state: AuthState,
   orderId: string,
@@ -300,41 +408,44 @@ export function quarantineWrongPatientPage(
   ctx: TransitionContext & { orderVersion: number },
 ): { order: OrderSnapshot; quarantined: DocumentSnapshot; remainder: DocumentSnapshot | null } {
   const split = splitAndQuarantine(state, docId, pageNumber, ctx);
-  const order = transitionOrder(state, orderId, "NEEDS_CORRECTION", {
+  const order = transitionOrder(state, orderId, "NEEDS_ADMIN_REVIEW", {
     actor: ctx.actor,
     expectedVersion: ctx.orderVersion,
-    reason: ctx.reason,
+    reason: "WRONG_PATIENT_PAGE",
+    detail: ctx.detail ?? { page: pageNumber, name: "another patient", dob: "unknown", sender: "the sender" },
     checkIds: ["MA-3"],
     now: ctx.now,
   });
   return { order, ...split };
 }
 
-/** Side effects that do not change status: resend, notify, message, open packet. */
 export function recordSideEffect(state: AuthState, effect: Effect): void {
   db(state).effects.push({ ...effect });
 }
 
-function restartOrderForAttachment(state: AuthState, orderId: string, ctx: TransitionContext): void {
+const DOCUMENT_CLEARS: readonly ReasonCode[] = [
+  "UNREADABLE_DOCUMENT",
+  "NO_MATCH",
+  "MISSING_DOCUMENTS",
+  "SIDE_MISMATCH",
+  "WRONG_PATIENT_PAGE",
+  "INSURER_MISMATCH",
+  "CPT_MISMATCH",
+  "MORE_INFO_REQUESTED",
+];
+
+function restartForAttachment(state: AuthState, orderId: string, ctx: TransitionContext): void {
   const order = mustOrder(state, orderId);
-  const to = attachmentRestart(order);
-  if (!to) return;
-  transitionOrder(state, orderId, to, {
+  if (order.status !== "NEEDS_ADMIN_REVIEW" || !order.reason || !DOCUMENT_CLEARS.includes(order.reason)) return;
+  transitionOrder(state, orderId, "PROCESSING", {
     actor: { kind: "system" },
     expectedVersion: order.statusVersion,
-    reason: "Document attached",
-    checkIds: [],
+    reason: null,
+    step: resumeStepFor(order.reason),
+    detail: { insurer: order.detail.insurer ?? null, n: order.detail.n ?? null },
     trigger: "document_attached",
     now: ctx.now,
-    ruleVersion: ctx.ruleVersion,
-    routingPolicyVersion: ctx.routingPolicyVersion,
   });
-}
-
-function attachmentRestart(order: OrderData): OrderStatus | null {
-  if (order.status === "AWAITING_DOCUMENTS" || order.status === "MORE_INFO_REQUESTED") return "COLLECTING_EVIDENCE";
-  if (order.status === "NEEDS_CORRECTION") return correctionDestination(order.blockingChecks);
-  return null;
 }
 
 function assertOrderActor(order: OrderData, to: OrderStatus, ctx: TransitionContext): void {
@@ -342,11 +453,9 @@ function assertOrderActor(order: OrderData, to: OrderStatus, ctx: TransitionCont
   if (ctx.mutateCriteria && actor.kind === "user" && actor.role === "coordinator") {
     throw new TransitionDeniedError("Coordinators can't edit criterion results");
   }
-  if (to === "READY_TO_SUBMIT" && actor.kind === "user" && actor.role === "coordinator") {
-    throw new TransitionDeniedError("Coordinators can't set Ready to submit");
-  }
-  if (to === "CLOSED_DENIED" && actor.kind === "system") {
-    throw new TransitionDeniedError("The system can't set Closed denied");
+
+  if (to === "DENIED" && actor.kind === "system") {
+    throw new TransitionDeniedError("The system can't set Denied");
   }
 
   if (to === "CANCELLED") {
@@ -359,25 +468,36 @@ function assertOrderActor(order: OrderData, to: OrderStatus, ctx: TransitionCont
   }
 
   if (actor.kind === "system") {
-    if (ctx.trigger === "document_attached") {
-      if (to !== attachmentRestart(order)) throw new TransitionDeniedError("A new document can't move the order there");
-      return;
-    }
-    if (ctx.trigger === "resend_received" && order.status === "UNREADABLE" && to === "RECEIVED") return;
-    if (ownerRole(order.status, order.channel) === "system") return;
-    if (order.status === "SUBMITTED") return;
+    if (ctx.trigger === "document_attached" && order.status === "NEEDS_ADMIN_REVIEW" && to === "PROCESSING") return;
+    if (order.status === "PROCESSING") return;
+    if (order.status === "SUBMITTED" && (to === "APPROVED" || to === "NEEDS_ADMIN_REVIEW" || to === "NEEDS_CLINICAL_REVIEW")) return;
+    if (order.status === "APPROVED" && to === "PROCESSING") return;
+    if (order.status === "NEEDS_ADMIN_REVIEW" && order.reason === "PORTAL_UPLOAD" && to === "SUBMITTED") return;
+    if (order.status === "NEEDS_ADMIN_REVIEW" && order.reason === "WRITEBACK_FAILED" && to === "APPROVED") return;
+    if (order.status === "NEEDS_CLINICAL_REVIEW" && order.reason === "PEER_TO_PEER" && to === "APPROVED") return;
     throw new TransitionDeniedError("The system can't leave this status");
   }
 
   const role = actor.role === "rules_admin" ? "nurse" : actor.role;
-  if (order.status === "SUBMITTED" && role === "coordinator") return;
-  if (order.status === "READY_TO_SUBMIT" && order.channel === "portal" && role === "coordinator" && to === "SUBMITTED") return;
-  if (order.status === "READY_TO_SUBMIT" && to === "SUBMITTED" && role !== "coordinator") {
+  if (role === "coordinator") {
+    if (order.status === "NEEDS_CLINICAL_REVIEW" && to === "PROCESSING") {
+      throw new TransitionDeniedError("A coordinator can't approve for submission");
+    }
+    if (order.status === "PROCESSING" && to === "SUBMITTED") {
+      throw new TransitionDeniedError("Coordinators can't submit through the API");
+    }
+    if (order.status === "NEEDS_ADMIN_REVIEW" && (to === "PROCESSING" || to === "SUBMITTED")) return;
+    if (order.status === "NEEDS_ADMIN_REVIEW" && order.reason === "WRITEBACK_FAILED" && to === "APPROVED") return;
+    if (order.status === "SUBMITTED" && (to === "APPROVED" || to === "NEEDS_ADMIN_REVIEW" || to === "NEEDS_CLINICAL_REVIEW")) return;
+    throw new TransitionDeniedError(`A coordinator can't move an order from ${order.status} to ${to}`);
+  }
+
+  if (order.status === "NEEDS_ADMIN_REVIEW" && to === "SUBMITTED") {
     throw new TransitionDeniedError("A nurse can't confirm a portal upload");
   }
-  if (ownerRole(order.status, order.channel) !== role) {
-    throw new TransitionDeniedError(`A ${role} can't move an order out of ${order.status}`);
-  }
+  if (order.status === "NEEDS_CLINICAL_REVIEW" && (to === "PROCESSING" || to === "SUBMITTED" || to === "DENIED")) return;
+  if (order.status === "NEEDS_CLINICAL_REVIEW" && order.reason === "PEER_TO_PEER" && to === "APPROVED") return;
+  throw new TransitionDeniedError(`A nurse can't move an order from ${order.status} to ${to}`);
 }
 
 function assertOrderConditions(order: OrderData, to: OrderStatus, ctx: TransitionContext): void {
@@ -388,32 +508,43 @@ function assertOrderConditions(order: OrderData, to: OrderStatus, ctx: Transitio
     }
   }
 
-  if ((order.status === "CLINICAL_REVIEW" || order.status === "RULE_GAP") && to === "READY_TO_SUBMIT") {
+  if (order.status === "APPROVED" && to === "PROCESSING") {
+    if (ctx.actor.kind !== "system") throw new TransitionDeniedError("Only the system can reopen an approval");
+    if (order.scanCompleted) throw new TransitionDeniedError("The scan is already complete");
+    const allowed = ["scan_outside_approval", "cpt_side_or_facility_changed", "insurer_changed"];
+    if (!ctx.epicEvent || !allowed.includes(ctx.epicEvent)) throw new TransitionDeniedError("Re-approval needs an Epic change");
+  }
+
+  if (order.status === "NEEDS_ADMIN_REVIEW" && to === "APPROVED") {
+    if (order.reason !== "WRITEBACK_FAILED") throw new TransitionDeniedError("Only a failed write-back can be confirmed from admin review");
+    if (!ctx.writeBackConfirmed && !ctx.epicAuthId?.trim()) throw new TransitionDeniedError("Epic auth id is required");
+  }
+
+  if (order.status === "NEEDS_CLINICAL_REVIEW" && to === "APPROVED") {
+    if (order.reason !== "PEER_TO_PEER") throw new TransitionDeniedError("Only a peer-to-peer outcome can approve from clinical review");
+    if (!ctx.writeBackConfirmed) throw new TransitionDeniedError("Write the approval to Epic before approving");
+  }
+
+  if (order.status === "NEEDS_ADMIN_REVIEW" && to === "SUBMITTED") {
+    if (!ctx.portalReference?.trim()) throw new TransitionDeniedError("Uploaded needs the portal reference number");
+  }
+
+  if (order.status === "NEEDS_CLINICAL_REVIEW" && to === "SUBMITTED" && order.reason !== "DENIED_DECIDE_APPEAL") {
+    throw new TransitionDeniedError("An appeal can only be filed from Denied: decide on appeal");
+  }
+
+  if (order.status === "NEEDS_CLINICAL_REVIEW" && to === "PROCESSING" && ctx.trigger !== "send_for_documents") {
     if (!ctx.note?.trim()) throw new TransitionDeniedError("A note is required");
   }
 
-  if (order.status === "NEEDS_CORRECTION" && (to === "COVERAGE_CHECK" || to === "COLLECTING_EVIDENCE")) {
-    const expected = correctionDestination(order.blockingChecks);
-    if (to !== expected) throw new TransitionDeniedError(`This correction returns to ${expected}`);
-  }
-
-  if (order.status === "CLINICAL_REVIEW" && to === "AWAITING_DOCUMENTS" && !order.fixableGaps) {
-    throw new TransitionDeniedError("Send back for documents is only available when the policy has fixable gaps");
-  }
-
-  if (order.status === "READY_TO_SUBMIT" && to === "SUBMITTED") {
-    if (order.channel === "portal") {
-      if (ctx.actor.kind !== "user" || ctx.actor.role === "nurse") {
-        throw new TransitionDeniedError("A portal upload is confirmed by a coordinator");
-      }
-      if (!ctx.portalReference?.trim()) throw new TransitionDeniedError("Uploaded needs the portal reference number");
-    } else if (!ctx.trackingNumber?.trim()) {
-      throw new TransitionDeniedError("Submitting needs a tracking number");
+  if (to === "CANCELLED") {
+    const personReasons: ReasonCode[] = ["WITHDRAWN_BY_NURSE", "WITHDRAWN_BY_COORDINATOR", "SLOT_RELEASED"];
+    if (ctx.actor.kind === "system" && ctx.reason !== "EPIC_CANCELLED") {
+      throw new TransitionDeniedError("Epic cancellations use the Epic cancelled reason");
     }
-  }
-
-  if (to === "CANCELLED" && ctx.actor.kind === "user" && !ctx.reason?.trim()) {
-    throw new TransitionDeniedError("A cancel reason is required");
+    if (ctx.actor.kind === "user" && (ctx.reason == null || !personReasons.includes(ctx.reason))) {
+      throw new TransitionDeniedError("A cancel reason is required");
+    }
   }
 }
 
@@ -424,29 +555,46 @@ function assertDocumentActor(ctx: TransitionContext): void {
   throw new TransitionDeniedError(`A ${role} can't change a document status`);
 }
 
-function formatReason(to: OrderStatus, ctx: TransitionContext): string {
-  if (to === "CANCELLED" && ctx.actor.kind === "user") return `Cancelled by ${ctx.actor.id}: ${ctx.reason}`;
-  if (to === "CANCELLED") return `Cancelled by system: ${ctx.reason}`;
-  if (to === "APPROVED" && ctx.approval?.linked) return `Linked existing approval ${ctx.approval.number}`;
-  if (to === "APPROVED" && ctx.approval) {
-    return `Approved ${ctx.approval.number}, valid ${ctx.approval.validFrom} to ${ctx.approval.validTo}`;
-  }
-  return ctx.reason;
+function sentenceFor(to: OrderStatus, reason: ReasonCode | null, step: ProcessingStep | null, detail: ReasonDetail): string {
+  if (to === "PROCESSING" && detail.whatChanged) return `Re-approval needed: ${detail.whatChanged}`;
+  if (to === "PROCESSING" && step) return stepProgress(step, detail);
+  if (!reason) return "Status changed";
+  const sentence = explainReason(reason, detail);
+  return unfilledPlaceholders(sentence).length > 0 ? reasonChip(reason) : sentence;
 }
 
-function recordOrderEffects(state: AuthState, order: OrderData, to: OrderStatus, ctx: TransitionContext, reason: string): void {
+function recordOrderEffects(state: AuthState, order: OrderData, ctx: TransitionContext, sentence: string): void {
   const effects = db(state).effects;
-  if (to === "AWAITING_DOCUMENTS") {
+  if (ctx.reason === "MISSING_DOCUMENTS") {
     const follow = ctx.followUp ?? DEFAULT_FOLLOW_UP;
-    effects.push({ type: "records_request", orderId: order.id, detail: reason });
+    effects.push({ type: "records_request", orderId: order.id, detail: sentence });
     effects.push({ type: "follow_up_timer", orderId: order.id, rerequestHours: follow.rerequestHours, phoneHours: follow.phoneHours });
   }
-  if (to === "RULE_GAP") effects.push({ type: "rules_admin_task", orderId: order.id, detail: reason });
-  if (to === "DENIED") effects.push({ type: "denial_backlog", orderId: order.id, reason: ctx.denialReason ?? reason });
-  if (to === "CLOSED_DENIED") effects.push({ type: "scheduling_notified", orderId: order.id });
-  if (to === "CANCELLED") effects.push({ type: "release_slot", orderId: order.id });
-  if (to === "APPROVED" && ctx.approval) effects.push({ type: "write_epic_approval", orderId: order.id, approval: { ...ctx.approval } });
-  if (to === "NOT_REQUIRED") effects.push({ type: "epic_not_required", orderId: order.id, policyId: ctx.policyId ?? null });
+  if (ctx.reason === "RULE_GAP" || ctx.reason === "DENIED_DECIDE_APPEAL") {
+    effects.push({ type: "rules_admin_task", orderId: order.id, detail: sentence });
+  }
+  if (order.status === "DENIED") effects.push({ type: "scheduling_notified", orderId: order.id });
+  if (order.status === "CANCELLED") effects.push({ type: "release_slot", orderId: order.id });
+  if (order.status === "APPROVED" && ctx.approval) effects.push({ type: "write_epic_approval", orderId: order.id, approval: { ...ctx.approval } });
+  if (order.status === "NOT_REQUIRED") effects.push({ type: "epic_not_required", orderId: order.id, policyId: ctx.policyId ?? null });
+}
+
+function assertReasonActor(order: OrderData, ctx: TransitionContext): void {
+  if (ctx.actor.kind === "system") return;
+  const role = ctx.actor.role === "rules_admin" ? "nurse" : ctx.actor.role;
+  if (role === "coordinator" && (order.status === "NEEDS_ADMIN_REVIEW" || order.status === "SUBMITTED")) return;
+  if (role === "nurse" && (order.status === "NEEDS_CLINICAL_REVIEW" || order.status === "SUBMITTED")) return;
+  throw new TransitionDeniedError(`A ${role} can't update the reason on ${order.status}`);
+}
+
+function checksFor(reason: ReasonCode | null): string[] {
+  if (reason === "SIDE_MISMATCH") return ["CO-1"];
+  if (reason === "WRONG_PATIENT_PAGE") return ["MA-3"];
+  if (reason === "INSURER_MISMATCH") return ["CV-1"];
+  if (reason === "CPT_MISMATCH") return ["CO-2"];
+  if (reason === "UNREADABLE_DOCUMENT") return ["PP-2"];
+  if (reason === "NO_MATCH") return ["MA-1"];
+  return [];
 }
 
 function writeAudit(state: AuthState, row: Omit<AuditRow, "id">): void {
@@ -472,6 +620,8 @@ function mustDocument(state: AuthState, id: string): DocumentData {
 function copyOrder(order: OrderData): OrderSnapshot {
   return {
     ...order,
+    detail: { ...order.detail },
+    otherIssues: order.otherIssues.map(copyIssue),
     blockingChecks: [...order.blockingChecks],
     approval: order.approval ? { ...order.approval } : null,
   };
@@ -479,6 +629,10 @@ function copyOrder(order: OrderData): OrderSnapshot {
 
 function copyDocument(doc: DocumentData): DocumentSnapshot {
   return { ...doc, pageNumbers: [...doc.pageNumbers] };
+}
+
+function copyIssue(issue: OtherIssue): OtherIssue {
+  return { code: issue.code, detail: { ...issue.detail } };
 }
 
 function copyAudit(row: AuditRow): AuditRow {

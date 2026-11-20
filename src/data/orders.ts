@@ -1,7 +1,10 @@
 import kirk from "@fixtures/case-1-kirk/expected.json";
 import rad114 from "@fixtures/rules/RAD-114.json";
 import { decide, type CriterionOutcome, type CriterionResult } from "@/domain/decision";
+import { explainReason } from "@/domain/priorAuth/reasons";
+import type { OtherIssue, ProcessingStep, ReasonCode, ReasonDetail } from "@/domain/priorAuth/types";
 import type { Order } from "@/domain/types";
+import type { StatusId } from "@/domain/statuses";
 
 /**
  * The prototype's fixed "now". Kirk's packet was printed 11/09/2026 3:38 PM, so the demo clock sits just after,
@@ -57,7 +60,7 @@ export const suluStatus = decide({
   confidenceThreshold: 0.85,
 });
 
-const kirkOrder: Order = {
+const kirkOrder = {
   id: "case-1-kirk",
   caseNumber: 1,
   source: "test-case",
@@ -80,7 +83,7 @@ const kirkOrder: Order = {
   policyRef: `RAD-114 v${kirk.expected.policy.version}`,
 };
 
-const scottOrder: Order = {
+const scottOrder = {
   id: "case-2-scott",
   caseNumber: 2,
   source: "test-case",
@@ -109,7 +112,7 @@ const scottOrder: Order = {
   ],
 };
 
-const suluOrder: Order = {
+const suluOrder = {
   id: "case-3-sulu",
   caseNumber: 3,
   source: "test-case",
@@ -140,7 +143,7 @@ const suluOrder: Order = {
 
 // ───────────────────────── Cases 4–23, each from its own packet ─────────────────────────
 
-const cases: Order[] = [
+const cases = [
   {
     id: "case-4-janeway",
     caseNumber: 4,
@@ -614,4 +617,75 @@ const cases: Order[] = [
   },
 ];
 
-export const SEED_ORDERS: Order[] = [kirkOrder, scottOrder, suluOrder, ...cases];
+interface Placement {
+  status: StatusId;
+  reasonCode: ReasonCode | null;
+  step?: ProcessingStep | null;
+  detail: ReasonDetail;
+  otherIssues?: OtherIssue[];
+  followUpDueAt?: string | null;
+  waitingOn?: string | null;
+}
+
+const PLACEMENT: Record<number, Placement> = {
+  1: { status: "submitted", reasonCode: "INITIAL_REQUEST", detail: { insurer: "Federation Health", channel: "API", date: "Nov 9", ref: "FH-58213", time: "3:45 PM" } },
+  2: {
+    status: "needs_admin_review",
+    reasonCode: "MISSING_DOCUMENTS",
+    detail: { document: "PT notes", source: "Utopia Planitia Rehab", requested: "Nov 9", followUp: "Nov 10", criterion: "conservative care" },
+    otherIssues: [{ code: "MISSING_DOCUMENTS", detail: { document: "prior knee MRI", source: "Epic", requested: "Nov 9", followUp: "Nov 10", criterion: "no recent MRI", line: "Prior knee MRI not confirmed. Will be checked in Epic on re-run." } }],
+    followUpDueAt: "2026-11-10T15:50:00",
+    waitingOn: "Utopia Planitia Rehab",
+  },
+  3: {
+    status: "needs_clinical_review",
+    reasonCode: "CRITERIA_NOT_MET",
+    detail: { policy: "IMG-330", failures: "3 weeks of symptoms (needs 6); 1 week of therapy", action: "talk to the ordering doctor", doctor: "the ordering doctor" },
+    otherIssues: [{ code: "MISSING_DOCUMENTS", detail: { document: "X-ray", source: "the clinic", requested: "Nov 9", followUp: "Nov 10", criterion: "prior imaging" } }],
+  },
+  4: { status: "submitted", reasonCode: "INITIAL_REQUEST", detail: { insurer: "Federation Health", channel: "API", date: "Nov 9", ref: "FH-58302", time: "3:20 PM" } },
+  5: { status: "needs_admin_review", reasonCode: "PORTAL_UPLOAD", detail: { n: 4, insurer: "Ferengi Benefit Group", k: 5 } },
+  6: { status: "needs_clinical_review", reasonCode: "CRITERIA_NOT_MET", detail: { policy: "IMG-330", failures: "left shoulder MRI on June 15 is inside 12 months, and there is no new injury", action: "talk to the ordering doctor", doctor: "the ordering doctor" } },
+  7: { status: "submitted", reasonCode: "INITIAL_REQUEST", detail: { insurer: "Vulcan Science Mutual", channel: "API", date: "Nov 9", ref: "VSM-58295", time: "3:05 PM" } },
+  8: { status: "needs_clinical_review", reasonCode: "CRITERIA_NOT_MET", detail: { policy: "Vulcan brain MRI", failures: "stable migraine, normal exam", action: "talk to the ordering doctor", doctor: "the ordering doctor" } },
+  9: { status: "submitted", reasonCode: "INITIAL_REQUEST", detail: { insurer: "Klingon Assurance", channel: "API", date: "Nov 9", ref: "KA-58291", time: "1:40 PM" } },
+  10: { status: "needs_clinical_review", reasonCode: "CRITERIA_NOT_MET", detail: { policy: "Klingon PET/CT", failures: "7 mm nodule and no biopsy", action: "talk to the ordering doctor", doctor: "the ordering doctor" } },
+  11: { status: "not_required", reasonCode: "NOT_ON_PA_LIST", detail: { cpt: "74177", insurer: "Bajoran Health Plan" } },
+  12: {
+    status: "needs_admin_review",
+    reasonCode: "MISSING_DOCUMENTS",
+    detail: { document: "the office note", source: "the ordering office", requested: "Nov 9", followUp: "Nov 10", criterion: "symptom duration" },
+    followUpDueAt: "2026-11-10T10:30:00",
+    waitingOn: "the ordering office",
+  },
+  13: { status: "needs_admin_review", reasonCode: "UNREADABLE_DOCUMENT", detail: { document: "the fax", problem: "fields: therapy, imaging, member id", sender: "the clinic" } },
+  14: { status: "needs_admin_review", reasonCode: "PORTAL_UPLOAD", detail: { n: 1, insurer: "Andorian Life", k: 4 } },
+  15: { status: "needs_admin_review", reasonCode: "WRONG_PATIENT_PAGE", detail: { page: 3, name: "Rom", dob: "01/11/1975", sender: "the clinic" } },
+  16: { status: "approved", reasonCode: "LINKED_EXISTING", detail: { number: "FH-AUTH-2026-118842", cpt: "72148", validFrom: "Nov 1", validTo: "Feb 4" } },
+  17: { status: "needs_admin_review", reasonCode: "SIDE_MISMATCH", detail: { side: "left", bodyPart: "knee", n: 3, otherSide: "right", records: "office note, PT note, X-ray", doctor: "Dr. Bashir-Mora's office (410) 555-0109" } },
+  18: { status: "needs_admin_review", reasonCode: "INSURER_MISMATCH", detail: { insurerA: "Federation Health", source: "card scanned Nov 9", insurerB: "Bajoran Health Plan", date: "Nov 1" } },
+  19: { status: "needs_clinical_review", reasonCode: "RULE_GAP", detail: { insurer: "Bajoran Health Plan", cpt: "72148" } },
+  20: { status: "needs_admin_review", reasonCode: "UNREADABLE_DOCUMENT", detail: { document: "the fax", problem: "all pages blank", sender: "Promenade Urgent Care 555-0148" } },
+  21: { status: "not_required", reasonCode: "SETTING_EXEMPT", detail: { setting: "Inpatient", insurer: "Federation Health" } },
+  22: { status: "needs_admin_review", reasonCode: "PORTAL_UPLOAD", detail: { n: 3, insurer: "Andorian Life", k: 4 } },
+  23: { status: "submitted", reasonCode: "INITIAL_REQUEST", detail: { insurer: "Federation Health", channel: "API", date: "Nov 9", ref: "FH-58304", time: "3:35 PM" } },
+};
+
+function finish(draft: { caseNumber: number; reason: string }): Order {
+  const place = PLACEMENT[draft.caseNumber];
+  if (!place) throw new Error(`No status for case ${draft.caseNumber}`);
+  const reasonCode = place.reasonCode;
+  return {
+    ...(draft as unknown as Order),
+    status: place.status,
+    reasonCode,
+    step: place.step ?? null,
+    detail: place.detail,
+    otherIssues: place.otherIssues ?? [],
+    followUpDueAt: place.followUpDueAt ?? null,
+    waitingOn: place.waitingOn ?? null,
+    reason: reasonCode ? explainReason(reasonCode, place.detail) : draft.reason,
+  };
+}
+
+export const SEED_ORDERS: Order[] = [kirkOrder, scottOrder, suluOrder, ...cases].map(finish);

@@ -37,18 +37,23 @@ describe("operations snapshot", () => {
     const open = SEED_ORDERS.filter((order) => !isClosed(order.status));
     expect(open).toHaveLength(20);
     const counts = Object.fromEntries(model.queue.map((row) => [row.id, row.count]));
-    expect(counts).toEqual({ ai: 5, coordinator: 11, nurse: 4, insurer: 0 });
+    expect(counts).toEqual({ ai: 0, coordinator: 10, nurse: 5, insurer: 5 });
     for (const order of open) {
       const owner = queueOwner(order.status, autonomyFor(order.insurer, order.channel));
       expect(owner).not.toBe("done");
     }
     expect(model.queue.find((row) => row.id === "coordinator")?.reasons).toEqual([
-      { label: "Awaiting documents", count: 3 },
-      { label: "Needs correction", count: 3 },
-      { label: "Unreadable", count: 1 },
-      { label: "No matching rule", count: 1 },
+      { label: "Missing docs", count: 2 },
+      { label: "Unreadable", count: 2 },
+      { label: "Side mismatch", count: 1 },
+      { label: "Wrong-patient page", count: 1 },
+      { label: "Insurer mismatch", count: 1 },
+      { label: "Portal upload", count: 3 },
     ]);
-    expect(model.queue.find((row) => row.id === "nurse")?.reasons).toEqual([{ label: "Clinical review", count: 4 }]);
+    expect(model.queue.find((row) => row.id === "nurse")?.reasons).toEqual([
+      { label: "Criteria not met", count: 4 },
+      { label: "Rule gap", count: 1 },
+    ]);
     expect(model.doneToday).toEqual([
       { label: "approved", count: 1 },
       { label: "not required", count: 2 },
@@ -56,7 +61,12 @@ describe("operations snapshot", () => {
   });
 
   it("puts slots at risk ahead of past-due cases, then earliest due", () => {
-    expect(model.attention.map((row) => row.orderId)).toEqual(["case-18-sisko", "case-9-picard", "case-17-obrien"]);
+    expect(model.attention.map((row) => row.orderId)).toEqual([
+      "case-13-laforge",
+      "case-18-sisko",
+      "case-19-kira",
+      "case-17-obrien",
+    ]);
     expect(model.attention.every((row) => row.pastDue && !row.slotAtRisk)).toBe(true);
 
     const soon: Order = {
@@ -118,7 +128,9 @@ describe("operations snapshot", () => {
     expect(ferengi?.autonomy).toBe("assisted");
     expect(ferengi?.aiReadyDenial).toBeGreaterThan(ferengi?.matchedBaseline ?? 1);
     expect(model.byInsurer[0]?.insurer).toBe("Federation Health");
-    expect(model.byInsurer.every((row) => row.open === 0)).toBe(true);
+    expect(model.byInsurer.find((row) => row.insurer === "Federation Health")?.open).toBe(3);
+    expect(model.byInsurer.find((row) => row.insurer === "Vulcan Science Mutual")?.open).toBe(1);
+    expect(model.byInsurer.find((row) => row.insurer === "Klingon Assurance")?.open).toBe(1);
   });
 
   it("scopes the queue to one insurer without leaving the worklist", () => {

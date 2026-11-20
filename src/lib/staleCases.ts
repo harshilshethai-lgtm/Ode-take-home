@@ -5,7 +5,7 @@ import type { StatusId } from "@/domain/statuses";
 import type { Order } from "@/domain/types";
 
 /** Statuses where the request has gone to the insurer or the case is closed. Everything else is unsubmitted. */
-const SENT_OR_CLOSED = new Set<StatusId>(["submitted", "more_info_requested", "approved", "not_required", "denied", "appeal", "closed_denied", "cancelled"]);
+const SENT_OR_CLOSED = new Set<StatusId>(["submitted", "approved", "not_required", "denied", "cancelled"]);
 
 export const isUnsubmitted = (o: Pick<Order, "status">) => !SENT_OR_CLOSED.has(o.status);
 

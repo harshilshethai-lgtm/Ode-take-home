@@ -2,7 +2,6 @@ import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Tip } from "@/components/ui/tooltip";
 import { actionsFor } from "@/domain/priorAuth/actions";
-import { correctionDestination } from "@/domain/priorAuth/catalog";
 import { toOrderStatus, toStatusId } from "@/domain/priorAuth/legacy";
 import { renderActions, type RenderedAction } from "@/domain/priorAuth/render";
 import { AuthState, createOrder, readAudits, recordSideEffect, transitionOrder } from "@/domain/priorAuth/store";
@@ -24,31 +23,32 @@ export function OrderActions({
   role,
   actorId,
   fixableGaps,
+  demotePrimary,
   onApplied,
 }: {
   order: Order;
   role: Person["role"];
   actorId: string;
   fixableGaps: boolean;
+  demotePrimary?: boolean;
   onApplied: (result: AppliedStatus) => void;
 }) {
   const [portalReference, setPortalReference] = useState("");
   const [note, setNote] = useState("");
-  const [cancelReason, setCancelReason] = useState("");
   const snapshot = toSnapshot(order, fixableGaps);
   const viewer = role as UserRole;
   const defined = actionsFor(snapshot, viewer);
-  const actions = renderActions(snapshot, viewer, { note, portalReference, cancelReason });
+  const actions = renderActions(snapshot, viewer, { note, portalReference });
   if (actions.length === 0) return null;
 
   const needsPortal = defined.some((action) => action.requires.includes("portalReference"));
   const needsNote = defined.some((action) => action.requires.includes("note"));
-  const needsCancel = defined.some((action) => action.requires.includes("cancelReason"));
 
   function run(action: RenderedAction) {
     if (action.disabled) return;
-    const target = action.id === "correction_made" ? correctionDestination(snapshot.blockingChecks) : action.to;
-    if (!target) {
+    const definedAction = defined.find((item) => item.id === action.id);
+    const target = action.to;
+    if (!target || !definedAction) {
       const state = new AuthState();
       recordSideEffect(state, sideEffect(action.id, order.id));
       onApplied({ label: action.label });
@@ -58,6 +58,9 @@ export function OrderActions({
     const created = createOrder(state, {
       status: snapshot.status,
       channel: snapshot.channel,
+      reason: snapshot.reason,
+      step: snapshot.step,
+      detail: snapshot.detail,
       blockingChecks: snapshot.blockingChecks,
       fixableGaps: snapshot.fixableGaps,
       confirmOnly: snapshot.confirmOnly,
@@ -66,9 +69,12 @@ export function OrderActions({
     const next = transitionOrder(state, created.id, target, {
       actor: { kind: "user", id: actorId, role: viewer, permissions: ["cancel"] },
       expectedVersion: created.statusVersion,
-      reason: cancelReason.trim() || note.trim() || action.label,
+      reason: definedAction.reason,
+      step: definedAction.step ?? null,
+      detail: snapshot.detail,
       note: note.trim(),
       portalReference: portalReference.trim(),
+      trigger: definedAction.trigger,
       checkIds: snapshot.blockingChecks,
     });
     const reason = readAudits(state, { orderId: created.id }).at(-1)?.reason ?? action.label;
@@ -101,19 +107,10 @@ export function OrderActions({
           className="h-7 w-40 rounded-md border border-line bg-panel px-2 text-body text-fg outline-none"
         />
       )}
-      {needsCancel && (
-        <input
-          value={cancelReason}
-          onChange={(e) => setCancelReason(e.target.value)}
-          placeholder="Cancel reason"
-          aria-label="Cancel reason"
-          className="h-7 w-36 rounded-md border border-line bg-panel px-2 text-body text-fg outline-none"
-        />
-      )}
       {actions.map((action, index) => (
         <Tip key={action.id} content={action.disabledReason ?? action.label}>
           <span>
-            <Button variant={index === 0 ? "default" : "secondary"} disabled={action.disabled} onClick={() => run(action)}>
+            <Button variant={index === 0 && !demotePrimary ? "default" : "secondary"} disabled={action.disabled} onClick={() => run(action)}>
               {action.label}
             </Button>
           </span>
@@ -129,12 +126,19 @@ function toSnapshot(order: Order, fixableGaps: boolean): OrderSnapshot {
     status: toOrderStatus(order.status),
     statusVersion: 1,
     channel: order.channel,
-    blockingChecks: order.blockingChecks ?? [],
-    fixableGaps,
-    awaitingDocumentsEntries: 0,
-    confirmOnly: order.confirmOnly === true,
+    reason: order.reasonCode,
+    step: order.step,
+    detail: order.detail,
+    otherIssues: order.otherIssues,
+    missingDocumentsEntries: 0,
+    resumeStep: null,
+    submissionAttempts: 0,
+    confirmOnly: order.reasonCode === "CONFIRM_AFTER_FIX",
     linkedApproval: order.linkedApproval === true,
     approval: null,
+    blockingChecks: order.blockingChecks ?? [],
+    fixableGaps,
+    scanCompleted: false,
     createdAt: order.statusSince,
   };
 }

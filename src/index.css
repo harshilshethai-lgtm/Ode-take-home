@@ -40,6 +40,21 @@
   --container-page: 1200px;
   --container-wide: 1440px;
   --container-impact: 1100px;
+  --container-case: 1040px;
+
+  /* Case page. 22px name, 15px block title, 16px summary, 14px values. Radius 12px on blocks. */
+  --text-display: 22px;
+  --text-display--line-height: 28px;
+  --text-display--font-weight: 500;
+  --text-block: 15px;
+  --text-block--line-height: 20px;
+  --text-block--font-weight: 500;
+  --text-lead: 16px;
+  --text-lead--line-height: 24px;
+  --text-value: 14px;
+  --text-value--line-height: 20px;
+  --radius-block: 12px;
+  --breakpoint-wide: 900px;
 
   /* Headline figure on the pilot impact page. Larger than the page title so the number is the answer. */
   --text-metric: 28px;
@@ -50,11 +65,22 @@
   --default-transition-timing-function: ease-out;
 }
 
+/* Order and documents sit side by side only when the case column itself has room. */
+@custom-variant case (@container case (min-width: 680px));
+
+@utility w-pane {
+  width: 440px;
+}
+
 :root {
   --app: #fbfbfc;
   --panel: #ffffff;
   --sidebar: var(--color-zinc-50);
   --line: color-mix(in oklab, var(--color-zinc-200) 60%, transparent);
+  --line-strong: var(--color-zinc-300);
+  /* Opaque accent tint. Mixed into white, not transparent, so it stays solid in both themes. */
+  --accent-bg: color-mix(in oklab, var(--color-indigo-600) 14%, white);
+  --accent-line: color-mix(in oklab, var(--color-indigo-600) 36%, white);
   --fg: var(--color-zinc-900);
   --fg-2: var(--color-zinc-500);
   --fg-3: var(--color-zinc-400);
@@ -108,6 +134,9 @@
   --panel: var(--color-zinc-900);
   --sidebar: var(--color-zinc-900);
   --line: color-mix(in oklab, var(--color-zinc-700) 60%, transparent);
+  --line-strong: var(--color-zinc-600);
+  --accent-bg: color-mix(in oklab, var(--color-indigo-400) 22%, var(--color-zinc-900));
+  --accent-line: color-mix(in oklab, var(--color-indigo-400) 46%, var(--color-zinc-900));
   --fg: var(--color-zinc-100);
   --fg-2: var(--color-zinc-400);
   --fg-3: var(--color-zinc-500);
@@ -147,6 +176,9 @@
   --color-panel: var(--panel);
   --color-sidebar: var(--sidebar);
   --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent-bg: var(--accent-bg);
+  --color-accent-line: var(--accent-line);
   --color-fg: var(--fg);
   --color-fg-2: var(--fg-2);
   --color-fg-3: var(--fg-3);

@@ -179,7 +179,7 @@ describe("Operations queue", () => {
   it("lists unsubmitted cases on an old version and bulk re-checks the selected ones", () => {
     publishRadV4();
     const before = staleCases(SEED_ORDERS, rulesApi);
-    expect(before.length).toBeGreaterThanOrEqual(2);
+    expect(before.length).toBeGreaterThanOrEqual(1);
     goOperations();
     expect(text()).toContain(`Needs re-check${before.length}`);
     expect(text()).toContain("Federation Health RAD-114 v3 → v4");
@@ -193,7 +193,7 @@ describe("Operations queue", () => {
     click(rechecks());
 
     expect(staleCases(SEED_ORDERS, rulesApi)).toHaveLength(0);
-    expect(text()).toContain(`Re-checked ${before.length} cases.`);
+    expect(text()).toContain(before.length === 1 ? "Re-checked 1 case." : `Re-checked ${before.length} cases.`);
     for (const s of before) expect(rulesApi.getLatestEvaluationFor(s.order.orderNumber!)!.rulesSnapshot?.versionNumber).toBe(4);
   });
 
