@@ -29,8 +29,9 @@ describe("inbound fax", () => {
 
   it("labels a failed portal upload as resubmit", () => {
     expect(actionStatusLabel("SUBMISSION_FAILED")).toBe("Resubmit");
-    expect(order("case-27-chekov").reason).toContain("upload failed: file > 10MB");
-    expect(order("case-27-chekov").reason).toContain("under 10MB");
+    expect(order("case-27-chekov").reason).toBe(
+      "Andorian Life portal rejected the request after 1 attempt: upload failed, file over 10MB; compress the packet under 10MB and resubmit.",
+    );
     expect(order("case-26-uhura").reasonCode).toBe("APPEAL");
     expect(order("case-26-uhura").status).toBe("submitted");
   });

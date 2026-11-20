@@ -138,7 +138,7 @@ export const REASON_TEMPLATE: Record<ReasonCode, string> = {
   PORTAL_UPLOAD: "Meets all {n} criteria. Upload to the {insurer} portal: {k} attachments, in order.",
   MEMBER_ID_MISSING: "No member ID in the packet or in Epic, so this was not auto-submitted.",
   RETURN_TO_PROVIDER: "{failures} are short of 6 weeks. Ask {doctor} to order an X-ray, continue PT, re-order at 6 weeks, and release the {slot} slot.",
-  SUBMISSION_FAILED: "{insurer} {channel} rejected the request after {n} attempts: {error}.",
+  SUBMISSION_FAILED: "{insurer} {channel} rejected the request after {n} {attemptLabel}: {error}.",
   MORE_INFO_REQUESTED: "{insurer} asked for: {items}. Due {date}.",
   STATUS_CHECK_FAILED: "Couldn't get a status from {insurer} since {time}: {error}. Last known: {normalized}.",
   APPROVAL_MISMATCH: "{insurer} approved {approved}, but the order is for {ordered}.",
@@ -372,7 +372,13 @@ export function fill(template: string, detail: ReasonDetail): string {
 }
 
 export function explainReason(code: ReasonCode, detail: ReasonDetail): string {
-  return fill(REASON_TEMPLATE[code], denialLine(code, detail));
+  const filled = denialLine(code, detail);
+  if (code !== "SUBMISSION_FAILED") return fill(REASON_TEMPLATE[code], filled);
+  const count = Number(filled.n);
+  return fill(REASON_TEMPLATE[code], {
+    ...filled,
+    attemptLabel: count === 1 ? "attempt" : "attempts",
+  });
 }
 
 export function whatToDo(code: ReasonCode, detail: ReasonDetail): string {
